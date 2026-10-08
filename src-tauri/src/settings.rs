@@ -10,6 +10,9 @@ pub struct Settings {
     pub hotkey_window: String,
     pub hotkey_screen: String,
     pub hotkey_text: String,
+    /// Windows: Print Screen also captures an area, instead of opening the
+    /// Snipping Tool.
+    pub print_screen: bool,
     /// Empty means the Desktop folder.
     pub save_dir: String,
     pub auto_copy: bool,
@@ -27,6 +30,7 @@ impl Default for Settings {
             hotkey_window: "Alt+Shift+5".into(),
             hotkey_screen: "Alt+Shift+3".into(),
             hotkey_text: "Alt+Shift+2".into(),
+            print_screen: false,
             save_dir: String::new(),
             auto_copy: true,
             auto_save: false,

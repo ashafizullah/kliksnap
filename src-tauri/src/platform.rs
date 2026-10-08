@@ -111,6 +111,10 @@ mod imp {
         });
     }
 
+    pub fn set_print_screen_opens_snipping(_enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+
     static FRONTMOST: AtomicPtr<AnyObject> = AtomicPtr::new(std::ptr::null_mut());
 
     /// Remembers the active app so focus can go back to it after the overlay
@@ -173,6 +177,32 @@ mod imp {
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
     pub fn activate_with_crosshair() {}
+    /// Turns Windows 11's "Use the Print screen key to open screen capture"
+    /// on or off, so the key is free for KlikSnap.
+    pub fn set_print_screen_opens_snipping(enabled: bool) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let status = std::process::Command::new("reg")
+            .args([
+                "add",
+                r"HKCU\Control Panel\Keyboard",
+                "/v",
+                "PrintScreenKeyForSnippingEnabled",
+                "/t",
+                "REG_DWORD",
+                "/d",
+                if enabled { "1" } else { "0" },
+                "/f",
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("couldn't change the Print Screen setting".into())
+        }
+    }
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }
@@ -193,6 +223,9 @@ mod imp {
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
     pub fn activate_with_crosshair() {}
+    pub fn set_print_screen_opens_snipping(_enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }

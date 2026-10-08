@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.3.0
+
+### New
+
+- Windows: Print Screen can capture an area instead of opening the Snipping Tool (Settings → Shortcuts)
+
 ## 0.2.1
 
 ### Fixes
