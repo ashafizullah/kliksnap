@@ -14,6 +14,7 @@
     preview_secs: number;
     launch_at_login: boolean;
     check_updates: boolean;
+    show_tray: boolean;
   };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text";
 
@@ -181,6 +182,19 @@
         <span>Launch at login</span>
         <input type="checkbox" bind:checked={s.launch_at_login} onchange={save} />
       </label>
+      {#if !isMac}
+        <label class="row">
+          <span>Show tray icon</span>
+          <input type="checkbox" bind:checked={s.show_tray} onchange={save} />
+        </label>
+        {#if !s.show_tray}
+          <p class="hint">KlikSnap keeps running on its shortcuts. Open it again from the Start menu to get back here.</p>
+          <div class="row">
+            <span>Stop KlikSnap until you open it again</span>
+            <button class="secondary" onclick={() => invoke("quit")}>Quit</button>
+          </div>
+        {/if}
+      {/if}
       <label class="row">
         <span>Check for updates automatically</span>
         <input type="checkbox" bind:checked={s.check_updates} onchange={save} />
