@@ -539,7 +539,7 @@ mod imp {
         pub fn stop(self) -> Result<(), String> {
             let handler = self.control.callback();
             self.control.stop().map_err(|e| e.to_string())?;
-            let mut h = handler.lock().map_err(|_| "recorder crashed")?;
+            let mut h = handler.lock();
             let mut encoder = h.encoder.take().ok_or("nothing was recorded")?;
             // Frames only come when the screen changes: repeat the last one
             // now, or a still ending would be cut off.
