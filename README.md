@@ -20,6 +20,10 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey" alt="macOS | Windows">
 </p>
 
+<p align="center">
+  <a href="https://trakteer.id/adamshafizullah/tip"><img src="https://img.shields.io/badge/Buy%20me%20an%20AI%20token-Trakteer-C02E2E?style=for-the-badge" alt="Buy me an AI token on Trakteer"></a>
+</p>
+
 ## Features
 
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
@@ -100,9 +104,13 @@ src/
   Settings.svelte, Toast.svelte
 ```
 
+## Support
+
+KlikSnap is free and always will be. If it saves you time, **[buy me an AI token on Trakteer](https://trakteer.id/adamshafizullah/tip)** ☕🤖. It keeps this project being developed.
+
 ## Contributing
 
-Issues and pull requests are welcome. Please run `npm run check` and `cargo clippy` before opening a PR.
+Issues and pull requests are welcome. `main` is protected: every change goes through a pull request and must pass CI (type checks, `cargo fmt`, `clippy` and tests on macOS and Windows). Please run `npm run check` and `cargo clippy` locally before opening a PR.
 
 ## License
 
