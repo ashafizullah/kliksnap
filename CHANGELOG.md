@@ -3,6 +3,19 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.5.0
+
+### New
+
+- Live selection: the screen keeps moving while you select, and the shot is taken when you let go. Turn it off in Settings → Selection to freeze the screen when the shortcut fires instead
+- Scroll while selecting to bring the part you want into view
+- The loupe magnifies the live screen as you select
+
+### Fixes
+
+- Preview buttons now show on hover right away, without a click first
+- Guide lines missing when the mouse was moving as the shortcut fired
+
 ## 0.4.1
 
 ### Fixes
