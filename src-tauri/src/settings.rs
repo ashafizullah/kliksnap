@@ -19,6 +19,9 @@ pub struct Settings {
     pub auto_save: bool,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
     pub preview_secs: u32,
+    /// Area/window selection over the live screen, captured once the
+    /// selection ends, instead of over a still taken when the shortcut fires.
+    pub live_selection: bool,
     pub launch_at_login: bool,
     pub check_updates: bool,
     /// Windows: hiding the tray icon keeps KlikSnap running on its shortcuts;
@@ -38,6 +41,7 @@ impl Default for Settings {
             auto_copy: true,
             auto_save: false,
             preview_secs: 6,
+            live_selection: true,
             launch_at_login: false,
             check_updates: true,
             show_tray: true,

@@ -11,11 +11,20 @@ mod imp {
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject};
     use tauri::WebviewWindow;
+    use xcap::image::RgbaImage;
 
     #[repr(C)]
     struct CGPoint {
         x: f64,
         y: f64,
+    }
+
+    #[repr(C)]
+    struct CGRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -24,11 +33,74 @@ mod imp {
         fn CGRequestScreenCaptureAccess() -> bool;
         fn CGEventCreate(source: *const c_void) -> *mut c_void;
         fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+        fn CGWindowListCreateImage(
+            rect: CGRect,
+            option: u32,
+            window: u32,
+            image_option: u32,
+        ) -> *const c_void;
+        fn CGImageGetWidth(image: *const c_void) -> usize;
+        fn CGImageGetHeight(image: *const c_void) -> usize;
+        fn CGImageGetBytesPerRow(image: *const c_void) -> usize;
+        fn CGImageGetBitsPerPixel(image: *const c_void) -> usize;
+        fn CGImageGetDataProvider(image: *const c_void) -> *const c_void;
+        fn CGDataProviderCopyData(provider: *const c_void) -> *const c_void;
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
         fn CFRelease(cf: *const c_void);
+        fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
+        fn CFDataGetLength(data: *const c_void) -> isize;
+    }
+
+    /// Readies a live-selection overlay for `capture_below`; returns its window number.
+    pub fn prepare_live_overlay(win: &WebviewWindow) -> u32 {
+        let Ok(ptr) = win.ns_window() else { return 0 };
+        let number: isize = unsafe { msg_send![&*(ptr as *const AnyObject), windowNumber] };
+        number as u32
+    }
+
+    /// What is on screen in `(x, y, w, h)` (global points) below `window`, so
+    /// the overlay itself is left out.
+    pub fn capture_below(window: u32, (x, y, w, h): (f64, f64, f64, f64)) -> Option<RgbaImage> {
+        const ON_SCREEN_BELOW_WINDOW: u32 = 1 << 2;
+        if window == 0 {
+            return None;
+        }
+        unsafe {
+            let image =
+                CGWindowListCreateImage(CGRect { x, y, w, h }, ON_SCREEN_BELOW_WINDOW, window, 0);
+            if image.is_null() {
+                return None;
+            }
+            let result = (|| {
+                if CGImageGetBitsPerPixel(image) != 32 {
+                    return None;
+                }
+                let (width, height) = (CGImageGetWidth(image), CGImageGetHeight(image));
+                let row = CGImageGetBytesPerRow(image);
+                let data = CGDataProviderCopyData(CGImageGetDataProvider(image));
+                if data.is_null() {
+                    return None;
+                }
+                let bytes = std::slice::from_raw_parts(
+                    CFDataGetBytePtr(data),
+                    CFDataGetLength(data) as usize,
+                );
+                let mut rgba = Vec::with_capacity(width * height * 4);
+                for line in bytes.chunks_exact(row).take(height) {
+                    for bgra in line[..width * 4].as_chunks::<4>().0 {
+                        rgba.extend_from_slice(&[bgra[2], bgra[1], bgra[0], 255]);
+                    }
+                }
+                CFRelease(data);
+                RgbaImage::from_raw(width as u32, height as u32, rgba)
+            })();
+            CFRelease(image);
+            result
+        }
     }
 
     /// Cursor position in global points (xcap's macOS coordinate space).
@@ -46,6 +118,15 @@ mod imp {
 
     pub fn has_screen_permission() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    /// Seconds since the last scroll-wheel or trackpad scroll event, momentum included.
+    pub fn secs_since_scroll() -> Option<f64> {
+        const COMBINED_SESSION_STATE: i32 = 0;
+        const SCROLL_WHEEL: u32 = 22;
+        Some(unsafe {
+            CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, SCROLL_WHEEL)
+        })
     }
 
     pub fn request_screen_permission() {
@@ -85,6 +166,30 @@ mod imp {
             if can_activate {
                 let _: () = msg_send![app, activate];
             }
+        }
+        set_crosshair();
+    }
+
+    /// Sets the crosshair once KlikSnap is the active app. Before that, the
+    /// app being left still owns the cursor and resets it while the mouse
+    /// moves, and WebKit won't set it again until the CSS cursor changes.
+    /// Returns whether it was set.
+    pub fn set_crosshair_if_active() -> bool {
+        let active: bool = unsafe {
+            let Some(app_class) = AnyClass::get(c"NSApplication") else {
+                return false;
+            };
+            let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+            msg_send![app, isActive]
+        };
+        if active {
+            set_crosshair();
+        }
+        active
+    }
+
+    fn set_crosshair() {
+        unsafe {
             if let Some(cursor_class) = AnyClass::get(c"NSCursor") {
                 let cursor: *mut AnyObject = msg_send![cursor_class, crosshairCursor];
                 let _: () = msg_send![cursor, set];
@@ -162,6 +267,17 @@ mod imp {
     #[link(name = "user32")]
     extern "system" {
         fn GetCursorPos(point: *mut Point) -> i32;
+        fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, affinity: u32) -> i32;
+    }
+
+    /// Keeps a live-selection overlay out of screen captures (Windows 10
+    /// 2004+), so the loupe sees what's below it. There is no window number.
+    pub fn prepare_live_overlay(win: &WebviewWindow) -> u32 {
+        const WDA_EXCLUDEFROMCAPTURE: u32 = 0x11;
+        if let Ok(hwnd) = win.hwnd() {
+            unsafe { SetWindowDisplayAffinity(hwnd.0, WDA_EXCLUDEFROMCAPTURE) };
+        }
+        0
     }
 
     /// Cursor position in physical pixels (xcap's Windows coordinate space).
@@ -177,6 +293,9 @@ mod imp {
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
     pub fn activate_with_crosshair() {}
+    pub fn set_crosshair_if_active() -> bool {
+        true
+    }
     /// Turns Windows 11's "Use the Print screen key to open screen capture"
     /// on or off, so the key is free for KlikSnap.
     pub fn set_print_screen_opens_snipping(enabled: bool) -> Result<(), String> {
@@ -208,6 +327,9 @@ mod imp {
     }
     pub fn remember_frontmost() {}
     pub fn restore_frontmost() {}
+    pub fn secs_since_scroll() -> Option<f64> {
+        None
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -217,12 +339,18 @@ mod imp {
     pub fn cursor_pos() -> (i32, i32) {
         (0, 0)
     }
+    pub fn prepare_live_overlay(_win: &WebviewWindow) -> u32 {
+        0
+    }
     pub fn has_screen_permission() -> bool {
         true
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
     pub fn activate_with_crosshair() {}
+    pub fn set_crosshair_if_active() -> bool {
+        true
+    }
     pub fn set_print_screen_opens_snipping(_enabled: bool) -> Result<(), String> {
         Ok(())
     }
@@ -231,4 +359,7 @@ mod imp {
     }
     pub fn remember_frontmost() {}
     pub fn restore_frontmost() {}
+    pub fn secs_since_scroll() -> Option<f64> {
+        None
+    }
 }

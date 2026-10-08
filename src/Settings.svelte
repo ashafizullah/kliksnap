@@ -12,6 +12,7 @@
     auto_copy: boolean;
     auto_save: boolean;
     preview_secs: number;
+    live_selection: boolean;
     launch_at_login: boolean;
     check_updates: boolean;
     show_tray: boolean;
@@ -145,6 +146,19 @@
         </label>
         <p class="hint">Replaces the Snipping Tool on the Print Screen key.</p>
       {/if}
+    </section>
+
+    <section>
+      <h2>Selection</h2>
+      <label class="row">
+        <span>Live screen while selecting</span>
+        <input type="checkbox" bind:checked={s.live_selection} onchange={save} />
+      </label>
+      <p class="hint">
+        {s.live_selection
+          ? "Videos keep playing; the shot is taken when you finish selecting. Open menus may close first."
+          : "The screen freezes when you press the shortcut, so open menus and tooltips stay in the shot."}
+      </p>
     </section>
 
     <section>
