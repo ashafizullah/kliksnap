@@ -21,6 +21,9 @@ pub struct Settings {
     pub preview_secs: u32,
     pub launch_at_login: bool,
     pub check_updates: bool,
+    /// Windows: hiding the tray icon keeps KlikSnap running on its shortcuts;
+    /// launching it again opens Settings.
+    pub show_tray: bool,
 }
 
 impl Default for Settings {
@@ -37,6 +40,7 @@ impl Default for Settings {
             preview_secs: 6,
             launch_at_login: false,
             check_updates: true,
+            show_tray: true,
         }
     }
 }

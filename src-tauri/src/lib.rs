@@ -318,6 +318,11 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second launch exits before setting anything up. It opens
+        // Settings instead, the way back in when the tray icon is hidden.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            let _ = ui::open_settings(app);
+        }))
         .plugin(hotkeys::plugin())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -346,6 +351,7 @@ pub fn run() {
             let (s, first_run) = settings::load(app.handle());
             app.manage(AppState::new(s.clone()));
             tray::create(app.handle())?;
+            tray::set_visible(app.handle(), s.show_tray);
             if let Err(e) = hotkeys::register(app.handle(), &s) {
                 eprintln!("hotkeys: {e}");
             }
@@ -379,6 +385,7 @@ pub fn run() {
             commands::toast_text,
             commands::check_updates,
             commands::app_version,
+            commands::quit,
         ])
         .build(tauri::generate_context!())
         .expect("error while building KlikSnap")

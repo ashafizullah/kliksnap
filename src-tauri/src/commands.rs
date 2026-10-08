@@ -49,6 +49,11 @@ pub async fn check_updates(app: AppHandle) {
 }
 
 #[tauri::command]
+pub fn quit(app: AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
 pub fn app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
@@ -254,6 +259,9 @@ pub fn save_settings(
             };
             r.map_err(|e| e.to_string())?;
         }
+    }
+    if settings.show_tray != old.show_tray {
+        tray::set_visible(&app, settings.show_tray);
     }
     crate::settings::store(&app, &settings)?;
     *state.settings.lock().unwrap() = settings;
