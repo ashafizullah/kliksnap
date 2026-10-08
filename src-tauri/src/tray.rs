@@ -20,7 +20,19 @@ fn item(
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let s = app.state::<AppState>().settings();
+    let state = app.state::<AppState>();
+    let s = state.settings();
+    if state.recording.lock().unwrap().is_some() {
+        return Menu::with_items(
+            app,
+            &[
+                &item(app, "stop_record", "Stop Recording", &s.hotkey_record)?,
+                &PredefinedMenuItem::separator(app)?,
+                &item(app, "settings", "Settings…", "")?,
+                &item(app, "quit", "Quit KlikSnap", "")?,
+            ],
+        );
+    }
     Menu::with_items(
         app,
         &[
@@ -30,6 +42,9 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item(app, "text", "Copy Text (OCR)", &s.hotkey_text)?,
             &item(app, "last_area", "Capture Last Area", &s.hotkey_last_area)?,
             &delay_menu(app)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, "record", "Record Area", &s.hotkey_record)?,
+            &item(app, "record_screen", "Record Screen", "")?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, "settings", "Settings…", "")?,
             &item(app, "update", "Check for Updates…", "")?,
@@ -69,8 +84,16 @@ fn on_delay(app: &AppHandle, id: &str) {
 }
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    // macOS: a template image, drawn white or black like the other menu bar
+    // icons. Windows: the app icon, which shows on light and dark taskbars.
+    let icon = if cfg!(target_os = "macos") {
+        tauri::include_image!("icons/tray.png")
+    } else {
+        tauri::include_image!("icons/64x64.png")
+    };
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::include_image!("icons/64x64.png"))
+        .icon(icon)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("KlikSnap")
         .menu(&menu(app)?)
         .show_menu_on_left_click(true)
@@ -80,6 +103,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "screen" => crate::start_capture(app, Mode::Screen),
             "text" => crate::start_capture(app, Mode::Text),
             "last_area" => crate::start_capture(app, Mode::LastArea),
+            "record" => crate::start_capture(app, Mode::Record),
+            "record_screen" => crate::start_capture(app, Mode::RecordScreen),
+            "stop_record" => crate::stop_recording(app),
             "settings" => {
                 let _ = crate::ui::open_settings(app);
             }

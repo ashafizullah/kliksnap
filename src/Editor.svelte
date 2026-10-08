@@ -293,9 +293,7 @@
       const info = await invoke<{ width: number; height: number; scale: number } | null>("shot_info", { id });
       if (!info) return closeWindow();
       scale = info.scale || 1;
-      // Canvas text falls back to another font until the bundled one has loaded.
-      const fonts = ["400", "700"].map((w) => document.fonts.load(fontCss("sans", w === "700", 16)));
-      [base] = await Promise.all([loadImage(imageUrl(`shot-${id}`)), ...fonts]);
+      base = await loadImage(imageUrl(`shot-${id}`));
       canvas.width = base.naturalWidth;
       canvas.height = base.naturalHeight;
       fit();

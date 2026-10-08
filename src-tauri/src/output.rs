@@ -38,17 +38,37 @@ pub fn file_name() -> String {
         .to_string()
 }
 
+pub fn recording_name() -> String {
+    chrono::Local::now()
+        .format("KlikSnap Recording %Y-%m-%d at %H.%M.%S.mp4")
+        .to_string()
+}
+
 /// `dir/name`, with " (2)", " (3)"… appended when the file already exists.
 pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     if !path.exists() {
         return path;
     }
-    let stem = name.trim_end_matches(".png");
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
     (2..)
-        .map(|n| dir.join(format!("{stem} ({n}).png")))
+        .map(|n| dir.join(format!("{stem} ({n}).{ext}")))
         .find(|p| !p.exists())
         .unwrap()
+}
+
+/// Shows the file selected in Finder or Explorer.
+pub fn reveal(path: &Path) -> Result<(), String> {
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("explorer");
+        c.arg(format!("/select,{}", path.display()));
+        c
+    } else {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").arg(path);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Uncompressed 32-bit BMP. Webviews decode it natively and it costs almost
@@ -75,4 +95,19 @@ pub fn bmp(img: &RgbaImage) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unique_path_keeps_the_extension() {
+        let dir = std::env::temp_dir().join(format!("kliksnap-unique-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.mp4"), b"").unwrap();
+        assert_eq!(unique_path(&dir, "a.mp4"), dir.join("a (2).mp4"));
+        assert_eq!(unique_path(&dir, "b.png"), dir.join("b.png"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

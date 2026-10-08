@@ -48,7 +48,7 @@ export const SIZES: Partial<Record<Tool, SizeSpec>> = {
 };
 
 export const FONTS = {
-  sans: { label: "Sans", stack: `"Plus Jakarta Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif` },
+  sans: { label: "Sans", stack: `-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif` },
   serif: { label: "Serif", stack: `Georgia, "Times New Roman", serif` },
   mono: { label: "Mono", stack: `ui-monospace, Menlo, Consolas, monospace` },
   hand: { label: "Hand", stack: `"Chalkboard SE", "Comic Sans MS", cursive` },

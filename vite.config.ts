@@ -17,6 +17,7 @@ export default defineConfig({
         toast: "toast.html",
         pin: "pin.html",
         countdown: "countdown.html",
+        recording: "recording.html",
       },
     },
   },

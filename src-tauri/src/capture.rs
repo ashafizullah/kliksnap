@@ -15,6 +15,11 @@ pub enum Mode {
     /// The last area or window selection again, without the overlay.
     #[serde(rename = "last_area")]
     LastArea,
+    /// Area selection that starts a screen recording of it.
+    Record,
+    /// Records the whole screen under the cursor.
+    #[serde(rename = "record_screen")]
+    RecordScreen,
 }
 
 /// Monitor bounds in xcap's coordinate space, which is also the space Tauri

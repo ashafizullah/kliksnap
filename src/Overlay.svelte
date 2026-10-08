@@ -11,6 +11,8 @@
   const ZOOM = 8;
 
   let mode = $state<Mode>("area");
+  // Selecting what to record rather than what to capture.
+  let recording = $state(false);
   let imageWidth = $state(0);
   let windows = $state<number[][] | null>(null);
   let mouse = $state({ x: -1, y: -1 });
@@ -181,11 +183,12 @@
   });
 
   async function init() {
-    const info = await invoke<{ mode: Mode | "screen"; width: number } | null>("overlay_info", { index });
+    const info = await invoke<{ mode: Mode | "screen" | "record"; width: number } | null>("overlay_info", { index });
     if (!info) return finish(null);
     imageWidth = info.width;
     live = info.width === 0;
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
+    recording = info.mode === "record";
     if (live) {
       ready();
       liveLoupe();
@@ -245,6 +248,7 @@
     {#if mode === "text"}
       Drag over text to copy it
     {:else}
+      {#if recording}<strong>Record</strong> ·{/if}
       {mode === "area" ? "Drag to select" : "Click a window"} · <kbd>Space</kbd>
       {mode === "area" ? "window mode" : "area mode"}
     {/if}

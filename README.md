@@ -29,6 +29,7 @@
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
 - **Floating preview** after each capture: copy, save, pin, or open the editor
 - **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
+- **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder; no audio yet
 - **Pin to screen**: keep a screenshot floating above your windows as a reference
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
 - **Annotate**: arrow, line, rectangle, ellipse, text, numbered steps, highlighter, pixelate (blur), crop, undo/redo
@@ -61,6 +62,7 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Capture screen | `⌥⇧3` / `Alt+Shift+3` |
 | Copy text (OCR) | `⌥⇧2` / `Alt+Shift+2` |
 | Capture last area | not set (Settings → Shortcuts) |
+| Record area / stop recording | not set (Settings → Shortcuts) |
 
 On Windows you can also hide the tray icon in Settings; KlikSnap keeps running on its shortcuts, and opening it again from the Start menu brings up Settings.
 
@@ -103,6 +105,7 @@ src-tauri/src/
   lib.rs        app state, capture flow, ks:// protocol
   capture.rs    screen/window capture (xcap), cropping
   ocr.rs        Apple Vision / Windows.Media.Ocr, QR codes
+  record.rs     screen recording (ScreenCaptureKit / Windows Graphics Capture → MP4)
   ui.rs         window creation and placement
   commands.rs   commands called from the webviews
   output.rs     clipboard, PNG saving

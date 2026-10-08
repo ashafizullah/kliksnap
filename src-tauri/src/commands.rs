@@ -43,6 +43,11 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
                 std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
             }
         }
+    } else if label == "recording" {
+        // Keep the controls out of the recording (Windows; macOS leaves all
+        // of KlikSnap's windows out).
+        platform::prepare_live_overlay(&window);
+        platform::show_inactive(&window);
     } else if label.starts_with("preview-") || label == "toast" || label == "countdown" {
         platform::show_inactive(&window);
     } else {
@@ -78,9 +83,20 @@ fn keep_crosshair(window: WebviewWindow) {
     });
 }
 
+/// The Check Now button in Settings: the result shows in Settings itself,
+/// and an update is offered in a dialog attached to it.
 #[tauri::command]
-pub async fn check_updates(app: AppHandle) {
-    crate::updater::check(app, true).await;
+pub async fn check_updates(app: AppHandle, window: WebviewWindow) -> Result<String, String> {
+    use crate::updater::Outcome;
+    match crate::updater::check_and_offer(&app, Some(&window)).await {
+        Ok(Outcome::UpToDate) => Ok(format!(
+            "You're up to date: {} is the latest version.",
+            app.package_info().version
+        )),
+        Ok(Outcome::Offered) => Ok(String::new()),
+        Ok(Outcome::Busy) => Ok("Already checking…".into()),
+        Err(e) => Err(format!("Couldn't check for updates: {e}")),
+    }
 }
 
 #[tauri::command]
@@ -96,6 +112,21 @@ pub fn app_version(app: AppHandle) -> String {
 #[tauri::command]
 pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn stop_recording(app: AppHandle) {
+    crate::stop_recording(&app);
+}
+
+/// Shows the file named by the current toast (a saved recording).
+#[tauri::command]
+pub fn reveal_toast_file(state: State<AppState>) -> Result<(), String> {
+    let path = state.toast.lock().unwrap().path.clone();
+    if path.is_empty() {
+        return Ok(());
+    }
+    output::reveal(std::path::Path::new(&path))
 }
 
 #[tauri::command]

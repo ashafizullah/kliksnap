@@ -249,9 +249,11 @@ fn cursor_inside(win: &WebviewWindow) -> Option<bool> {
 
 const TOAST_W: f64 = 300.0;
 const TOAST_H: f64 = 76.0;
+const TOAST_TALL_H: f64 = 84.0;
 
 /// Shows the OCR result notice in the bottom-right corner, replacing any open one.
-pub fn show_toast(app: &AppHandle, b: &Bounds) -> tauri::Result<()> {
+pub fn show_toast(app: &AppHandle, b: &Bounds, tall: bool) -> tauri::Result<()> {
+    let h = if tall { TOAST_TALL_H } else { TOAST_H };
     if let Some(old) = app.get_webview_window("toast") {
         old.destroy()?;
     }
@@ -264,20 +266,26 @@ pub fn show_toast(app: &AppHandle, b: &Bounds) -> tauri::Result<()> {
         .skip_taskbar(true)
         .focused(false)
         .visible_on_all_workspaces(true)
-        .inner_size(TOAST_W, TOAST_H)
+        .inner_size(TOAST_W, h)
         .visible(false)
         .build()?;
     let x = area.x + area.w - area.n(TOAST_W + MARGIN);
-    let y = area.y + area.h - area.n(TOAST_H + MARGIN);
-    place(&win, &area, x, y, TOAST_W, TOAST_H);
+    let y = area.y + area.h - area.n(h + MARGIN);
+    place(&win, &area, x, y, TOAST_W, h);
     Ok(())
 }
 
 const COUNTDOWN_W: f64 = 96.0;
 const COUNTDOWN_H: f64 = 64.0;
 
-/// Shows the timed-capture countdown in the bottom-right corner.
-pub fn show_countdown(app: &AppHandle, b: &Bounds, secs: u32) -> tauri::Result<WebviewWindow> {
+/// Shows a countdown centered on `center` (native units), or in the
+/// bottom-right corner.
+pub fn show_countdown(
+    app: &AppHandle,
+    b: &Bounds,
+    secs: u32,
+    center: Option<(f64, f64)>,
+) -> tauri::Result<WebviewWindow> {
     if let Some(old) = app.get_webview_window("countdown") {
         old.destroy()?;
     }
@@ -295,10 +303,45 @@ pub fn show_countdown(app: &AppHandle, b: &Bounds, secs: u32) -> tauri::Result<W
         .inner_size(COUNTDOWN_W, COUNTDOWN_H)
         .visible(false)
         .build()?;
-    let x = area.x + area.w - area.n(COUNTDOWN_W + MARGIN);
-    let y = area.y + area.h - area.n(COUNTDOWN_H + MARGIN);
+    let (x, y) = match center {
+        Some((cx, cy)) => (
+            cx - area.n(COUNTDOWN_W) / 2.0,
+            cy - area.n(COUNTDOWN_H) / 2.0,
+        ),
+        None => (
+            area.x + area.w - area.n(COUNTDOWN_W + MARGIN),
+            area.y + area.h - area.n(COUNTDOWN_H + MARGIN),
+        ),
+    };
     place(&win, &area, x, y, COUNTDOWN_W, COUNTDOWN_H);
     Ok(win)
+}
+
+const RECORDING_W: f64 = 168.0;
+const RECORDING_H: f64 = 44.0;
+
+/// Shows the recording's timer and Stop button in the bottom-right corner.
+pub fn show_recording(app: &AppHandle, b: &Bounds) -> tauri::Result<()> {
+    if let Some(old) = app.get_webview_window("recording") {
+        old.destroy()?;
+    }
+    let area = work_area(app, b);
+    let win = WebviewWindowBuilder::new(app, "recording", WebviewUrl::App("recording.html".into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible_on_all_workspaces(true)
+        .inner_size(RECORDING_W, RECORDING_H)
+        .visible(false)
+        .build()?;
+    let x = area.x + area.w - area.n(RECORDING_W + MARGIN);
+    let y = area.y + area.h - area.n(RECORDING_H + MARGIN);
+    place(&win, &area, x, y, RECORDING_W, RECORDING_H);
+    Ok(())
 }
 
 /// Pins a shot to the screen: a borderless window that stays on top, at
@@ -386,7 +429,7 @@ pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("KlikSnap Settings")
-        .inner_size(460.0, 756.0)
+        .inner_size(460.0, 560.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
