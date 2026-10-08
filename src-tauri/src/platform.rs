@@ -71,13 +71,22 @@ mod imp {
         });
     }
 
-    /// Shows a window without stealing focus from the app the user is in.
+    /// Shows a window without stealing focus from the app the user is in,
+    /// and keeps it in the corner of every Space, full-screen apps included,
+    /// so switching desktops doesn't leave it behind.
     pub fn show_inactive(win: &WebviewWindow) {
         let win = win.clone();
         let _ = win.clone().run_on_main_thread(move || {
             let Ok(ptr) = win.ns_window() else { return };
             let ns_window = unsafe { &*(ptr as *const AnyObject) };
-            let _: () = unsafe { msg_send![ns_window, orderFrontRegardless] };
+            const STATUS_LEVEL: isize = 25;
+            // canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
+            const BEHAVIOR: usize = 1 << 0 | 1 << 4 | 1 << 6 | 1 << 8;
+            unsafe {
+                let _: () = msg_send![ns_window, setLevel: STATUS_LEVEL];
+                let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+                let _: () = msg_send![ns_window, orderFrontRegardless];
+            }
         });
     }
 
