@@ -34,6 +34,7 @@ pub fn bindings(s: &Settings) -> Vec<(&str, Mode)> {
         (s.hotkey_window.as_str(), Mode::Window),
         (s.hotkey_screen.as_str(), Mode::Screen),
         (s.hotkey_text.as_str(), Mode::Text),
+        (s.hotkey_last_area.as_str(), Mode::LastArea),
     ];
     if cfg!(target_os = "windows")
         && s.print_screen

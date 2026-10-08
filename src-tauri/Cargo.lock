@@ -2403,7 +2403,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kliksnap"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -2419,6 +2419,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "windows",
+ "windows-collections",
  "xcap",
 ]
 

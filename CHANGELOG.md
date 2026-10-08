@@ -3,6 +3,21 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.6.0
+
+### New
+
+- Pin a screenshot to the screen: it floats above other windows where you took it. Drag it to move, scroll to zoom, right-click for Copy, Save and Annotate, double-click or `Esc` to close. Pin from the preview, or from the editor with `⌘P` / `Ctrl+P`
+- Capture after a delay: tray → *Capture After Delay* takes an area or the whole screen after 3, 5 or 10 seconds. Click the countdown to cancel
+- Numbered steps in the editor (`N`): each click places the next number, ①, ②, ③…, in the current color and size. Undo takes the last one back
+- Every editor tool with a size gets a slider: line thickness, font size, number size and pixelate block size. `1 2 3` still pick the presets, and `[` `]` nudge the size, and double-clicking the slider resets it. The editor remembers your sizes
+- Text can use another font (Sans, Serif, Mono, Hand) and be bold or regular
+- Share from the editor: the system share menu (AirDrop, Messages, Mail… on macOS; Windows Share on Windows). Nothing is uploaded by KlikSnap
+- Clear All in the editor (`⌘⌫` / `Ctrl+Backspace`) removes every annotation and the crop; undo brings them back
+- KlikSnap now uses the Plus Jakarta Sans font, built into the app so it works offline. Editor text and numbers use it too
+- Capture resolution in Settings → After capture: Max (100%), Medium (75%) or Low (50%) for smaller files. Copy Text (OCR) always reads the full resolution
+- Capture Last Area takes the same area again without selecting it. Set a shortcut for it in Settings → Shortcuts
+
 ## 0.5.0
 
 ### New

@@ -1,3 +1,5 @@
+@import "@fontsource-variable/plus-jakarta-sans";
+
 :root {
   --bg: #f6f6f7;
   --panel: #ffffff;
@@ -32,7 +34,7 @@ html,
 body {
   margin: 0;
   height: 100%;
-  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.4 "Plus Jakarta Sans Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   color: var(--text);
   background: var(--bg);
   -webkit-user-select: none;

@@ -27,10 +27,14 @@
 ## Features
 
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
-- **Floating preview** after each capture: copy, save, or open the editor
-- **Annotate**: arrow, line, rectangle, ellipse, text, highlighter, pixelate (blur), crop, undo/redo
+- **Floating preview** after each capture: copy, save, pin, or open the editor
+- **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
+- **Pin to screen**: keep a screenshot floating above your windows as a reference
+- **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
+- **Annotate**: arrow, line, rectangle, ellipse, text, numbered steps, highlighter, pixelate (blur), crop, undo/redo
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr). If the selection holds a QR code, its content is copied instead
 - Copies to the clipboard automatically; optional auto-save to a folder
+- **Capture resolution**: Max, Medium (75%) or Low (50%) for smaller files
 - **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
 The macOS app is about 4 MB per architecture (a 5 MB universal DMG) and uses about 15 MB of memory while idle.
@@ -56,12 +60,15 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Capture window | `⌥⇧5` / `Alt+Shift+5` |
 | Capture screen | `⌥⇧3` / `Alt+Shift+3` |
 | Copy text (OCR) | `⌥⇧2` / `Alt+Shift+2` |
+| Capture last area | not set (Settings → Shortcuts) |
 
 On Windows you can also hide the tray icon in Settings; KlikSnap keeps running on its shortcuts, and opening it again from the Start menu brings up Settings.
 
 On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` instead of the Snipping Tool.
 
-In area mode, press `Space` to switch to window mode and `Esc` to cancel. In the editor, use `A L R O T H P C` to pick a tool, `1 2 3` to set the size, `⌘C` to copy, `⌘S` to save and `⌘⇧S` for Save As.
+In area mode, press `Space` to switch to window mode and `Esc` to cancel. In the editor, use `A L R O T N H P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
+
+A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%). Right-click it for Copy, Save and Annotate; double-click or press `Esc` to close it.
 
 ## Development
 

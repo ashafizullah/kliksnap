@@ -7,23 +7,26 @@
     hotkey_window: string;
     hotkey_screen: string;
     hotkey_text: string;
+    hotkey_last_area: string;
     print_screen: boolean;
     save_dir: string;
     auto_copy: boolean;
     auto_save: boolean;
+    capture_scale: number;
     preview_secs: number;
     live_selection: boolean;
     launch_at_login: boolean;
     check_updates: boolean;
     show_tray: boolean;
   };
-  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text";
+  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area";
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
     { field: "hotkey_area", label: "Capture area" },
     { field: "hotkey_window", label: "Capture window" },
     { field: "hotkey_screen", label: "Capture screen" },
     { field: "hotkey_text", label: "Copy text (OCR)" },
+    { field: "hotkey_last_area", label: "Capture last area" },
   ];
 
   let s = $state<Settings | null>(null);
@@ -171,6 +174,20 @@
         <span>Save to folder</span>
         <input type="checkbox" bind:checked={s.auto_save} onchange={save} />
       </label>
+      <label class="row">
+        <span>Resolution</span>
+        <select bind:value={s.capture_scale} onchange={save}>
+          <option value={100}>Max (100%)</option>
+          <option value={75}>Medium (75%)</option>
+          <option value={50}>Low (50%)</option>
+        </select>
+      </label>
+      {#if s.capture_scale < 100}
+        <p class="hint">
+          Smaller files, less detail. {isMac ? "On a Retina display, Low matches the size things appear on screen." : ""}
+          Copy Text (OCR) always reads the full resolution.
+        </p>
+      {/if}
       <label class="row">
         <span>Hide preview after</span>
         <select bind:value={s.preview_secs} onchange={save}>

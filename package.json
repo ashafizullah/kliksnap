@@ -1,6 +1,6 @@
 {
   "name": "kliksnap",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Free, open-source, lightweight screenshot tool for macOS and Windows",
   "private": true,
   "type": "module",
@@ -12,6 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "@tauri-apps/api": "^2"
   },
   "devDependencies": {

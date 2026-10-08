@@ -34,7 +34,10 @@ pub struct AppState {
     previews: Mutex<Vec<u32>>,
     /// Previews hidden to keep them out of the capture in progress.
     hidden_previews: Mutex<Vec<WebviewWindow>>,
-    editor_shots: Mutex<HashMap<String, u32>>,
+    /// Shots shown by an editor or a pin, by window label.
+    window_shots: Mutex<HashMap<String, u32>>,
+    /// The last area or window selection: its monitor and rect in fractions of it.
+    last_area: Mutex<Option<(Bounds, [f64; 4])>>,
     busy: AtomicBool,
     /// Live selection: overlay window numbers by monitor, for the loupe.
     overlay_ids: Mutex<HashMap<usize, u32>>,
@@ -63,7 +66,8 @@ impl AppState {
             next_shot: AtomicU32::new(1),
             previews: Mutex::default(),
             hidden_previews: Mutex::default(),
-            editor_shots: Mutex::default(),
+            window_shots: Mutex::default(),
+            last_area: Mutex::default(),
             busy: AtomicBool::new(false),
             passing_scroll: AtomicBool::new(false),
             overlay_ids: Mutex::default(),
@@ -83,6 +87,12 @@ impl AppState {
             .unwrap()
             .get(&id)
             .map(|s| (s.img.clone(), s.bounds))
+    }
+
+    fn insert_shot(&self, shot: Shot) -> u32 {
+        let id = self.next_shot.fetch_add(1, Ordering::SeqCst);
+        self.shots.lock().unwrap().insert(id, shot);
+        id
     }
 
     fn retain(&self, id: u32) {
@@ -138,8 +148,28 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
     if mode == Mode::Screen {
         let frozen = capture::freeze_at(platform::cursor_pos())?;
         state.busy.store(false, Ordering::SeqCst);
-        return finish_shot(app, frozen.img.unwrap_or_default(), frozen.bounds);
+        let origin = (frozen.bounds.x, frozen.bounds.y);
+        return finish_shot(
+            app,
+            frozen.img.unwrap_or_default(),
+            frozen.bounds,
+            Some(origin),
+        );
     }
+    let mode = if mode == Mode::LastArea {
+        let last = *state.last_area.lock().unwrap();
+        // With nothing to repeat, or its monitor gone, select a new area.
+        match last.map(|(b, rect)| (b, rect, capture::capture_monitor(&b))) {
+            Some((b, rect, Ok(screen))) => {
+                state.busy.store(false, Ordering::SeqCst);
+                let img = capture::crop(&screen, rect).ok_or("empty selection")?;
+                return finish_shot(app, img, b, Some(capture::origin(&b, rect)));
+            }
+            _ => Mode::Area,
+        }
+    } else {
+        mode
+    };
     let frozen = if state.settings().live_selection {
         capture::monitors()?
     } else {
@@ -178,6 +208,9 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         reveal_previews(app);
     }
     let mode = *state.mode.lock().unwrap();
+    if mode != Mode::Text {
+        *state.last_area.lock().unwrap() = Some((f.bounds, rect));
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         let screen = match f.img {
@@ -200,7 +233,7 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         let result = if mode == Mode::Text {
             finish_text(&app, &img, &f.bounds)
         } else {
-            finish_shot(&app, img, f.bounds)
+            finish_shot(&app, img, f.bounds, Some(capture::origin(&f.bounds, rect)))
         };
         if let Err(e) = result {
             eprintln!("{e}");
@@ -242,6 +275,34 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
     ui::show_toast(app, bounds).map_err(|e| e.to_string())
 }
 
+/// Counts down in the corner, then starts the capture; clicking the countdown
+/// cancels it. The countdown never takes focus, so menus and hover states
+/// opened in the meantime stay open for the capture.
+pub fn start_capture_after(app: &AppHandle, mode: Mode, secs: u32) {
+    let bounds = match capture::bounds_at(platform::cursor_pos()) {
+        Ok(b) => b,
+        Err(e) => return eprintln!("timed capture: {e}"),
+    };
+    let win = match ui::show_countdown(app, &bounds, secs) {
+        Ok(w) => w,
+        Err(e) => return eprintln!("timed capture: {e}"),
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let end = std::time::Instant::now() + Duration::from_secs(secs.into());
+        while std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+            if app.get_webview_window(win.label()).is_none() {
+                return; // cancelled
+            }
+        }
+        let _ = win.destroy();
+        // Give the countdown time to leave the screen.
+        std::thread::sleep(Duration::from_millis(150));
+        start_capture(&app, mode);
+    });
+}
+
 /// Shows the previews hidden by `start_capture` again.
 fn reveal_previews(app: &AppHandle) {
     let hidden = std::mem::take(&mut *app.state::<AppState>().hidden_previews.lock().unwrap());
@@ -250,20 +311,28 @@ fn reveal_previews(app: &AppHandle) {
     }
 }
 
-fn finish_shot(app: &AppHandle, img: RgbaImage, bounds: Bounds) -> Result<(), String> {
+fn finish_shot(
+    app: &AppHandle,
+    img: RgbaImage,
+    bounds: Bounds,
+    origin: Option<(i32, i32)>,
+) -> Result<(), String> {
     reveal_previews(app);
     let state = app.state::<AppState>();
     let s = state.settings();
+    let (img, k) = capture::downscale(img, s.capture_scale);
+    // Annotation sizes, the editor and pins go by pixels per point.
+    let bounds = Bounds {
+        scale: bounds.scale * k,
+        ..bounds
+    };
     let img = Arc::new(img);
-    let id = state.next_shot.fetch_add(1, Ordering::SeqCst);
-    state.shots.lock().unwrap().insert(
-        id,
-        Shot {
-            img: img.clone(),
-            bounds,
-            refs: 1,
-        },
-    );
+    let id = state.insert_shot(Shot {
+        img: img.clone(),
+        bounds,
+        origin,
+        refs: 1,
+    });
     let previews = {
         let mut previews = state.previews.lock().unwrap();
         previews.push(id);
@@ -330,8 +399,8 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
         if let Some((_, bounds)) = previews.last().and_then(|&newest| state.shot(newest)) {
             ui::stack_previews(app, &previews, &bounds);
         }
-    } else if label.starts_with("editor-") {
-        if let Some(id) = state.editor_shots.lock().unwrap().remove(label) {
+    } else if label.starts_with("editor-") || label.starts_with("pin-") {
+        if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
         }
     } else if label.starts_with("overlay-")
@@ -379,6 +448,7 @@ pub fn run() {
             let (s, first_run) = settings::load(app.handle());
             app.manage(AppState::new(s.clone()));
             tray::create(app.handle())?;
+            app.on_menu_event(commands::on_pin_menu);
             tray::set_visible(app.handle(), s.show_tray);
             if let Err(e) = hotkeys::register(app.handle(), &s) {
                 eprintln!("hotkeys: {e}");
@@ -408,6 +478,8 @@ pub fn run() {
             commands::copy_shot,
             commands::save_shot,
             commands::edit_shot,
+            commands::pin_shot,
+            commands::pin_menu,
             commands::export_image,
             commands::get_settings,
             commands::save_settings,

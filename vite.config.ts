@@ -15,6 +15,8 @@ export default defineConfig({
         editor: "editor.html",
         settings: "settings.html",
         toast: "toast.html",
+        pin: "pin.html",
+        countdown: "countdown.html",
       },
     },
   },

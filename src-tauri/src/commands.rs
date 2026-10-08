@@ -4,11 +4,12 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use xcap::image::RgbaImage;
 
-use crate::capture::{self, Mode};
+use crate::capture::{self, Mode, Shot};
 use crate::settings::Settings;
 use crate::{hotkeys, output, platform, tray, ui, AppState};
 
@@ -42,7 +43,7 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
                 std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
             }
         }
-    } else if label.starts_with("preview-") || label == "toast" {
+    } else if label.starts_with("preview-") || label == "toast" || label == "countdown" {
         platform::show_inactive(&window);
     } else {
         let _ = window.show();
@@ -248,9 +249,14 @@ pub async fn save_shot(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let img = shot_image(&state, id)?;
-    let dir = state.settings().save_dir(&app);
+    save_to_folder(&app, &img)
+}
+
+/// Saves into the folder from Settings; returns the file's path.
+fn save_to_folder(app: &AppHandle, img: &RgbaImage) -> Result<String, String> {
+    let dir = app.state::<AppState>().settings().save_dir(app);
     let path = output::unique_path(&dir, &output::file_name());
-    output::save_png(&img, &path)?;
+    output::save_png(img, &path)?;
     Ok(path.display().to_string())
 }
 
@@ -262,11 +268,96 @@ pub async fn edit_shot(app: AppHandle, id: u32, state: State<'_, AppState>) -> R
     let label =
         ui::open_editor(&app, id, &bounds, img.width(), img.height()).map_err(|e| e.to_string())?;
     state.retain(id);
-    state.editor_shots.lock().unwrap().insert(label, id);
+    state.window_shots.lock().unwrap().insert(label, id);
     if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
         let _ = preview.destroy();
     }
     Ok(())
+}
+
+/// Async for the same reason as `edit_shot`.
+#[tauri::command]
+pub async fn pin_shot(app: AppHandle, id: u32) -> Result<(), String> {
+    open_pin(&app, id)?;
+    if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
+        let _ = preview.destroy();
+    }
+    Ok(())
+}
+
+fn open_pin(app: &AppHandle, id: u32) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let origin = state.shots.lock().unwrap().get(&id).and_then(|s| s.origin);
+    let (img, bounds) = state.shot(id).ok_or("screenshot expired")?;
+    let label = ui::open_pin(app, id, &bounds, origin, img.width(), img.height())
+        .map_err(|e| e.to_string())?;
+    state.retain(id);
+    state.window_shots.lock().unwrap().insert(label, id);
+    Ok(())
+}
+
+/// Shows a pin's context menu; `on_pin_menu` handles the choice.
+#[tauri::command]
+pub fn pin_menu(window: WebviewWindow) -> Result<(), String> {
+    let label = window.label();
+    let e = |e: tauri::Error| e.to_string();
+    let item = |action: &str, text: &str| {
+        MenuItem::with_id(
+            &window,
+            format!("pin:{action}:{label}"),
+            text,
+            true,
+            None::<&str>,
+        )
+    };
+    let menu = Menu::with_items(
+        &window,
+        &[
+            &item("copy", "Copy").map_err(e)?,
+            &item("save", "Save").map_err(e)?,
+            &item("edit", "Annotate").map_err(e)?,
+            &PredefinedMenuItem::separator(&window).map_err(e)?,
+            &item("close", "Close").map_err(e)?,
+        ],
+    )
+    .map_err(e)?;
+    window.popup_menu(&menu).map_err(e)
+}
+
+pub fn on_pin_menu(app: &AppHandle, event: MenuEvent) {
+    let Some((action, label)) = event
+        .id()
+        .as_ref()
+        .strip_prefix("pin:")
+        .and_then(|rest| rest.split_once(':'))
+    else {
+        return;
+    };
+    let Some(win) = app.get_webview_window(label) else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    let id = state.window_shots.lock().unwrap().get(label).copied();
+    let img = id.and_then(|id| state.shot(id).map(|s| (id, s.0)));
+    let result = match (action, img) {
+        ("close", _) => win.destroy().map_err(|e| e.to_string()),
+        ("copy", Some((_, img))) => output::copy(&img),
+        ("save", Some((_, img))) => save_to_folder(app, &img).map(|_| ()),
+        ("edit", Some((id, _))) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                if let Err(e) = edit_shot(app.clone(), id, state).await {
+                    eprintln!("pin: {e}");
+                }
+            });
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+    if let Err(e) = result {
+        eprintln!("pin {action}: {e}");
+    }
 }
 
 #[derive(Deserialize)]
@@ -274,12 +365,18 @@ struct ExportMeta {
     action: String,
     width: u32,
     height: u32,
+    /// Share: the button to open the share menu under, in CSS pixels.
+    anchor: Option<[f64; 4]>,
 }
 
 /// Receives the editor's rendered RGBA pixels as a raw body; metadata rides in
 /// the `x-ks` header so the pixels never pass through JSON.
 #[tauri::command]
-pub async fn export_image(app: AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
+pub async fn export_image(
+    app: AppHandle,
+    window: WebviewWindow,
+    request: Request<'_>,
+) -> Result<Option<String>, String> {
     let InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected raw image data".into());
     };
@@ -295,6 +392,31 @@ pub async fn export_image(app: AppHandle, request: Request<'_>) -> Result<Option
     let dir = state.settings().save_dir(&app);
     let path = match meta.action.as_str() {
         "copy" => return output::copy(&img).map(|_| None),
+        "share" => {
+            let path = share_file(&app)?;
+            output::save_png(&img, &path)?;
+            let [x, y, w, h] = meta.anchor.unwrap_or_default();
+            return platform::share(&window, &path, (x, y, w, h)).map(|_| None);
+        }
+        "pin" => {
+            let edited = state
+                .window_shots
+                .lock()
+                .unwrap()
+                .get(window.label())
+                .copied();
+            let bounds = edited
+                .and_then(|id| state.shot(id))
+                .ok_or("screenshot expired")?
+                .1;
+            let id = state.insert_shot(Shot {
+                img: std::sync::Arc::new(img),
+                bounds,
+                origin: None,
+                refs: 0,
+            });
+            return open_pin(&app, id).map(|_| None);
+        }
         "save" => output::unique_path(&dir, &output::file_name()),
         "savecopy" => {
             output::copy(&img)?;
@@ -321,6 +443,28 @@ pub async fn export_image(app: AppHandle, request: Request<'_>) -> Result<Option
     };
     output::save_png(&img, &path)?;
     Ok(Some(path.display().to_string()))
+}
+
+/// A fresh path for a file to share. Shared files stay in the cache for an
+/// hour, since AirDrop and the like read them after the menu has closed.
+fn share_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("share");
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(3600));
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(output::unique_path(&dir, &output::file_name()))
 }
 
 #[tauri::command]

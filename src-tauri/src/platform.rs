@@ -7,8 +7,9 @@ mod imp {
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicPtr, Ordering};
 
+    use objc2::encode::{Encode, Encoding};
     use objc2::msg_send;
-    use objc2::rc::Retained;
+    use objc2::rc::{Allocated, Retained};
     use objc2::runtime::{AnyClass, AnyObject};
     use tauri::WebviewWindow;
     use xcap::image::RgbaImage;
@@ -25,6 +26,17 @@ mod imp {
         y: f64,
         w: f64,
         h: f64,
+    }
+
+    // Same layout as CoreGraphics' {origin {x, y}, size {width, height}}.
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding = Encoding::Struct(
+            "CGRect",
+            &[
+                Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]),
+                Encoding::Struct("CGSize", &[Encoding::Double, Encoding::Double]),
+            ],
+        );
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -220,6 +232,61 @@ mod imp {
         Ok(())
     }
 
+    /// Opens the share menu (AirDrop, Messages, Mail…) for the file at
+    /// `path`, below `rect`: CSS pixels in the window's webview.
+    pub fn share(
+        win: &WebviewWindow,
+        path: &std::path::Path,
+        (x, y, w, h): (f64, f64, f64, f64),
+    ) -> Result<(), String> {
+        let path =
+            std::ffi::CString::new(path.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
+        let win = win.clone();
+        win.clone()
+            .run_on_main_thread(move || unsafe {
+                let Ok(ptr) = win.ns_window() else { return };
+                let ns_window = &*(ptr as *const AnyObject);
+                let (Some(string_cls), Some(url_cls), Some(array_cls), Some(picker_cls)) = (
+                    AnyClass::get(c"NSString"),
+                    AnyClass::get(c"NSURL"),
+                    AnyClass::get(c"NSArray"),
+                    AnyClass::get(c"NSSharingServicePicker"),
+                ) else {
+                    return;
+                };
+                let string: Option<Retained<AnyObject>> =
+                    msg_send![string_cls, stringWithUTF8String: path.as_ptr()];
+                let Some(string) = string else { return };
+                let url: Option<Retained<AnyObject>> =
+                    msg_send![url_cls, fileURLWithPath: &*string];
+                let Some(url) = url else { return };
+                let items: Option<Retained<AnyObject>> =
+                    msg_send![array_cls, arrayWithObject: &*url];
+                let Some(items) = items else { return };
+                let picker: Allocated<AnyObject> = msg_send![picker_cls, alloc];
+                let picker: Option<Retained<AnyObject>> = msg_send![picker, initWithItems: &*items];
+                let Some(picker) = picker else { return };
+                let view: *mut AnyObject = msg_send![ns_window, contentView];
+                let Some(view) = view.as_ref() else { return };
+                // The content view counts y from the bottom, CSS from the top.
+                let bounds: CGRect = msg_send![view, bounds];
+                let rect = CGRect {
+                    x,
+                    y: bounds.h - y - h,
+                    w,
+                    h,
+                };
+                const MIN_Y_EDGE: usize = 1;
+                let _: () = msg_send![
+                    &*picker,
+                    showRelativeToRect: rect,
+                    ofView: view,
+                    preferredEdge: MIN_Y_EDGE
+                ];
+            })
+            .map_err(|e| e.to_string())
+    }
+
     static FRONTMOST: AtomicPtr<AnyObject> = AtomicPtr::new(std::ptr::null_mut());
 
     /// Remembers the active app so focus can go back to it after the overlay
@@ -298,6 +365,60 @@ mod imp {
     }
     /// Turns Windows 11's "Use the Print screen key to open screen capture"
     /// on or off, so the key is free for KlikSnap.
+    /// Opens the Windows share window for the file at `path`.
+    pub fn share(
+        win: &WebviewWindow,
+        path: &std::path::Path,
+        _rect: (f64, f64, f64, f64),
+    ) -> Result<(), String> {
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        let path = windows::core::HSTRING::from(path.as_os_str());
+        win.run_on_main_thread(move || {
+            if let Err(e) = show_share(hwnd, path) {
+                eprintln!("share: {e}");
+            }
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    /// The share handler registered for each window, so sharing again replaces it.
+    static SHARE_HANDLERS: std::sync::Mutex<Vec<(isize, i64)>> = std::sync::Mutex::new(Vec::new());
+
+    fn show_share(hwnd: isize, path: windows::core::HSTRING) -> windows::core::Result<()> {
+        use windows::core::{factory, Interface, HSTRING};
+        use windows::ApplicationModel::DataTransfer::{
+            DataRequestedEventArgs, DataTransferManager,
+        };
+        use windows::Foundation::TypedEventHandler;
+        use windows::Storage::{IStorageItem, StorageFile};
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Shell::IDataTransferManagerInterop;
+
+        let window = HWND(hwnd as *mut std::ffi::c_void);
+        let interop = factory::<DataTransferManager, IDataTransferManagerInterop>()?;
+        let manager: DataTransferManager = unsafe { interop.GetForWindow(window)? };
+        let handler =
+            TypedEventHandler::new(move |_, args: windows::core::Ref<DataRequestedEventArgs>| {
+                let request = args.ok()?.Request()?;
+                let data = request.Data()?;
+                data.Properties()?.SetTitle(&HSTRING::from("Screenshot"))?;
+                let file = StorageFile::GetFileFromPathAsync(&path)?.join()?;
+                let item: IStorageItem = file.cast()?;
+                data.SetStorageItemsReadOnly(&windows_collections::IIterable::from(vec![Some(
+                    item,
+                )]))
+            });
+        let token = manager.DataRequested(&handler)?;
+        let mut handlers = SHARE_HANDLERS.lock().unwrap();
+        if let Some(i) = handlers.iter().position(|(h, _)| *h == hwnd) {
+            let (_, old) = handlers.remove(i);
+            let _ = manager.RemoveDataRequested(old);
+        }
+        handlers.push((hwnd, token));
+        drop(handlers);
+        unsafe { interop.ShowShareUIForWindow(window) }
+    }
+
     pub fn set_print_screen_opens_snipping(enabled: bool) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -361,5 +482,12 @@ mod imp {
     pub fn restore_frontmost() {}
     pub fn secs_since_scroll() -> Option<f64> {
         None
+    }
+    pub fn share(
+        _win: &WebviewWindow,
+        _path: &std::path::Path,
+        _rect: (f64, f64, f64, f64),
+    ) -> Result<(), String> {
+        Err("sharing isn't supported here".into())
     }
 }

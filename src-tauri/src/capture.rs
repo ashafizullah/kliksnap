@@ -12,6 +12,9 @@ pub enum Mode {
     Screen,
     /// Area selection that copies the recognized text instead of the image.
     Text,
+    /// The last area or window selection again, without the overlay.
+    #[serde(rename = "last_area")]
+    LastArea,
 }
 
 /// Monitor bounds in xcap's coordinate space, which is also the space Tauri
@@ -51,6 +54,9 @@ pub struct Frozen {
 pub struct Shot {
     pub img: Arc<RgbaImage>,
     pub bounds: Bounds,
+    /// Where the shot's top-left corner was on screen, in xcap space; None
+    /// when it doesn't match a spot on screen (an edited copy).
+    pub origin: Option<(i32, i32)>,
     pub refs: u32,
 }
 
@@ -73,15 +79,24 @@ pub fn freeze_all() -> Result<Vec<Frozen>, String> {
     Ok(out)
 }
 
-pub fn freeze_at(point: (i32, i32)) -> Result<Frozen, String> {
-    let m = match Monitor::from_point(point.0, point.1) {
-        Ok(m) => m,
+fn monitor_at(point: (i32, i32)) -> Result<Monitor, String> {
+    match Monitor::from_point(point.0, point.1) {
+        Ok(m) => Ok(m),
         Err(_) => Monitor::all()
             .map_err(|e| e.to_string())?
             .into_iter()
             .next()
-            .ok_or("no monitors found")?,
-    };
+            .ok_or_else(|| "no monitors found".into()),
+    }
+}
+
+/// Bounds of the monitor holding `point`, without capturing it.
+pub fn bounds_at(point: (i32, i32)) -> Result<Bounds, String> {
+    Bounds::of(&monitor_at(point)?)
+}
+
+pub fn freeze_at(point: (i32, i32)) -> Result<Frozen, String> {
+    let m = monitor_at(point)?;
     let img = m.capture_image().map_err(|e| e.to_string())?;
     Ok(Frozen {
         bounds: Bounds::of(&m)?,
@@ -206,6 +221,30 @@ pub fn under_overlay(b: &Bounds, overlay: u32, [fx, fy, fw, fh]: [f64; 4]) -> Op
     }
 }
 
+/// The top-left corner of `rect` (fractions of `b`) in xcap space.
+pub fn origin(b: &Bounds, [fx, fy, _, _]: [f64; 4]) -> (i32, i32) {
+    (
+        b.x + (fx * b.w as f64).round() as i32,
+        b.y + (fy * b.h as f64).round() as i32,
+    )
+}
+
+/// Scales `img` to `percent` of its size, never below 1×1; returns the factor
+/// used, so the caller can adjust the shot's pixels-per-point.
+pub fn downscale(img: RgbaImage, percent: u32) -> (RgbaImage, f64) {
+    let k = percent.clamp(10, 100) as f64 / 100.0;
+    if k >= 1.0 {
+        return (img, 1.0);
+    }
+    let w = ((img.width() as f64 * k).round() as u32).max(1);
+    let h = ((img.height() as f64 * k).round() as u32).max(1);
+    let k = w as f64 / img.width() as f64;
+    (
+        imageops::resize(&img, w, h, imageops::FilterType::CatmullRom),
+        k,
+    )
+}
+
 /// Crops by a rectangle given as fractions of the image size.
 pub fn crop(img: &RgbaImage, [fx, fy, fw, fh]: [f64; 4]) -> Option<RgbaImage> {
     let (iw, ih) = (img.width() as f64, img.height() as f64);
@@ -218,4 +257,40 @@ pub fn crop(img: &RgbaImage, [fx, fy, fw, fh]: [f64; 4]) -> Option<RgbaImage> {
         return None;
     }
     Some(imageops::crop_imm(img, x0 as u32, y0 as u32, w, h).to_image())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_maps_fractions_into_monitor_space() {
+        let b = Bounds {
+            x: -1440,
+            y: 100,
+            w: 1440,
+            h: 900,
+            scale: 2.0,
+        };
+        assert_eq!(origin(&b, [0.5, 0.25, 0.1, 0.1]), (-720, 325));
+    }
+
+    #[test]
+    fn downscale_keeps_full_size_and_scales_down() {
+        let (same, k) = downscale(RgbaImage::new(200, 100), 100);
+        assert_eq!((same.dimensions(), k), ((200, 100), 1.0));
+        let (half, k) = downscale(RgbaImage::new(200, 101), 50);
+        assert_eq!(half.dimensions(), (100, 51));
+        assert_eq!(k, 0.5);
+        let (tiny, _) = downscale(RgbaImage::new(1, 1), 50);
+        assert_eq!(tiny.dimensions(), (1, 1));
+    }
+
+    #[test]
+    fn crop_rejects_empty_rects() {
+        let img = RgbaImage::new(100, 50);
+        assert!(crop(&img, [0.5, 0.5, 0.0, 0.2]).is_none());
+        let part = crop(&img, [0.1, 0.2, 0.5, 0.5]).unwrap();
+        assert_eq!(part.dimensions(), (50, 25));
+    }
 }

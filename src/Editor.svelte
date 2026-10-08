@@ -3,16 +3,20 @@
   import { closeWindow, imageUrl, invoke, isMac, loadImage, param, ready } from "./lib/api";
   import {
     COLORS,
-    FONT_SIZES,
-    STROKES,
+    FONTS,
+    SIZES,
     constrain,
+    fontCss,
+    nextStep,
     normalize,
+    type DragShape,
+    type FontId,
     type Rect,
     type Scene,
     type Shape,
     type Tool,
   } from "./lib/editor/shapes";
-  import { FONT, drawCropMask, drawScene, exportPixels } from "./lib/editor/render";
+  import { drawCropMask, drawScene, exportPixels } from "./lib/editor/render";
 
   const id = Number(param("id"));
 
@@ -22,6 +26,7 @@
     { id: "rect", label: "Rectangle", key: "r", d: "M3 4h12v10H3z" },
     { id: "ellipse", label: "Ellipse", key: "o", d: "M3 9a6 5 0 1 0 12 0a6 5 0 1 0-12 0" },
     { id: "text", label: "Text", key: "t", d: "M4 4h10M9 4v11" },
+    { id: "step", label: "Number", key: "n", d: "M3 9a6 6 0 1 0 12 0a6 6 0 1 0-12 0M8 7l1.5-1v6" },
     { id: "highlight", label: "Highlight", key: "h", d: "M3 15h12M6 12l5-8 3 2-5 8H6z" },
     { id: "pixelate", label: "Pixelate", key: "p", d: "M3 3h4v4H3zM11 3h4v4h-4zM7 7h4v4H7zM3 11h4v4H3zM11 11h4v4h-4z" },
     { id: "crop", label: "Crop", key: "c", d: "M5 2v11h11M2 5h11v11" },
@@ -37,7 +42,43 @@
 
   let tool: Tool = $state("arrow");
   let color = $state(COLORS[0]);
-  let sizeIndex = $state(1);
+
+  // Sizes and text style carry over to the next editor.
+  const PREFS = "editor-prefs";
+  const prefs = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(PREFS) ?? "{}");
+    } catch {
+      return {};
+    }
+  })();
+  let sizes = $state(
+    Object.fromEntries(
+      Object.entries(SIZES).map(([t, spec]) => {
+        const saved = Number(prefs.sizes?.[t]);
+        return [t, saved >= spec.min && saved <= spec.max ? saved : spec.presets[1]];
+      }),
+    ) as Record<Tool, number>,
+  );
+  let font = $state<FontId>(prefs.font in FONTS ? prefs.font : "sans");
+  let bold = $state<boolean>(prefs.bold ?? true);
+  const sizeSpec = $derived(SIZES[tool]);
+
+  $effect(() => {
+    const json = JSON.stringify({ sizes, font, bold });
+    try {
+      localStorage.setItem(PREFS, json);
+    } catch {
+      // Private storage off: the defaults come back next time.
+    }
+  });
+
+  function nudgeSize(dir: number) {
+    const spec = SIZES[tool];
+    if (!spec) return;
+    const step = spec.max > 40 ? 2 : 1;
+    sizes[tool] = Math.min(spec.max, Math.max(spec.min, sizes[tool] + dir * step));
+  }
 
   let scene: Scene = $state.raw({ shapes: [], crop: null });
   let past: Scene[] = $state.raw([]);
@@ -68,6 +109,11 @@
     future = [...future, scene];
     scene = past[past.length - 1];
     past = past.slice(0, -1);
+  }
+
+  function clearAll() {
+    text = null;
+    if (scene.shapes.length || scene.crop) commit({ shapes: [], crop: null });
   }
 
   function redo() {
@@ -113,6 +159,11 @@
     e.preventDefault();
     if (text) commitText();
     const p = toImage(e);
+    if (tool === "step") {
+      const step = { kind: "step" as const, x: p.x, y: p.y, n: nextStep(scene.shapes), color, size: sizes.step };
+      commit({ ...scene, shapes: [...scene.shapes, step] });
+      return;
+    }
     if (tool === "text") {
       text = { x: p.x, y: p.y, value: "" };
       await tick();
@@ -131,13 +182,13 @@
       cropDraft = normalize(dragFrom.x, dragFrom.y, x2, y2);
     } else if (DRAG_TOOLS.has(tool)) {
       draft = {
-        kind: tool as Exclude<Tool, "text" | "crop">,
+        kind: tool as DragShape["kind"],
         x1: dragFrom.x,
         y1: dragFrom.y,
         x2,
         y2,
         color: tool === "highlight" && color === "#ff3b30" ? "#ffcc00" : color,
-        size: STROKES[sizeIndex],
+        size: sizes[tool],
       };
     }
   }
@@ -145,7 +196,7 @@
   function onPointerUp() {
     if (cropDraft && cropDraft.w > 4 && cropDraft.h > 4) {
       commit({ ...scene, crop: cropDraft });
-    } else if (draft && draft.kind !== "text" && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) > 3) {
+    } else if (draft && "x2" in draft && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) > 3) {
       commit({ ...scene, shapes: [...scene.shapes, draft] });
     }
     dragFrom = null;
@@ -159,7 +210,7 @@
     if (value) {
       commit({
         ...scene,
-        shapes: [...scene.shapes, { kind: "text", x: text.x, y: text.y, text: value, color, size: FONT_SIZES[sizeIndex] }],
+        shapes: [...scene.shapes, { kind: "text", x: text.x, y: text.y, text: value, color, size: sizes.text, font, bold }],
       });
     }
     text = null;
@@ -177,25 +228,29 @@
 
   // Display ratio between CSS pixels and image pixels.
   const ratio = $derived(base && view.w ? view.w / base.naturalWidth : 1);
-  const textFontPx = $derived(FONT_SIZES[sizeIndex] * scale * ratio);
+  const textFontPx = $derived(sizes.text * scale * ratio);
   const textWidth = $derived.by(() => {
     if (!text) return 0;
     const ctx = document.createElement("canvas").getContext("2d")!;
-    ctx.font = `600 ${textFontPx}px ${FONT}`;
+    ctx.font = fontCss(font, bold, textFontPx);
     const widest = Math.max(...text.value.split("\n").map((l) => ctx.measureText(l).width));
     return Math.max(textFontPx * 2, widest + textFontPx);
   });
 
   /** Exports the annotated image and closes the editor, unless Save As is cancelled. */
-  async function exportImage(action: "copy" | "save" | "saveas" | "savecopy") {
+  let shareButton = $state<HTMLButtonElement>();
+
+  async function exportImage(action: "copy" | "save" | "saveas" | "savecopy" | "pin" | "share") {
     if (!base) return;
     if (text) commitText();
     try {
       const { bytes, width, height } = exportPixels(base, scene, scale);
+      const r = shareButton?.getBoundingClientRect();
+      const anchor = action === "share" && r ? [r.left, r.top, r.width, r.height] : null;
       const path = await invoke<string | null>("export_image", bytes, {
-        headers: { "x-ks": JSON.stringify({ action, width, height }) },
+        headers: { "x-ks": JSON.stringify({ action, width, height, anchor }) },
       });
-      if (action === "copy" || path) closeWindow();
+      if (action === "copy" || action === "pin" || path) closeWindow();
     } catch (e) {
       flash(`Export failed: ${e}`);
     }
@@ -210,7 +265,9 @@
         y: redo,
         c: () => exportImage(e.shiftKey ? "savecopy" : "copy"),
         s: () => exportImage(e.shiftKey ? "saveas" : "save"),
+        p: () => exportImage("pin"),
         w: closeWindow,
+        backspace: clearAll,
       };
       if (action[key]) {
         e.preventDefault();
@@ -226,7 +283,8 @@
     }
     const picked = TOOLS.find((t) => t.key === key);
     if (picked) tool = picked.id;
-    else if (["1", "2", "3"].includes(key)) sizeIndex = Number(key) - 1;
+    else if (["1", "2", "3"].includes(key) && sizeSpec) sizes[tool] = sizeSpec.presets[Number(key) - 1];
+    else if (key === "[" || key === "]") nudgeSize(key === "]" ? 1 : -1);
   }
 
   onMount(() => {
@@ -235,7 +293,9 @@
       const info = await invoke<{ width: number; height: number; scale: number } | null>("shot_info", { id });
       if (!info) return closeWindow();
       scale = info.scale || 1;
-      base = await loadImage(imageUrl(`shot-${id}`));
+      // Canvas text falls back to another font until the bundled one has loaded.
+      const fonts = ["400", "700"].map((w) => document.fonts.load(fontCss("sans", w === "700", 16)));
+      [base] = await Promise.all([loadImage(imageUrl(`shot-${id}`)), ...fonts]);
       canvas.width = base.naturalWidth;
       canvas.height = base.naturalHeight;
       fit();
@@ -285,21 +345,6 @@
       {/each}
     </div>
 
-    <div class="group" role="radiogroup" aria-label="Size">
-      {#each STROKES as _, i (i)}
-        <button
-          class="icon"
-          class:active={sizeIndex === i}
-          title="Size {i + 1} ({i + 1})"
-          aria-label="Size {i + 1}"
-          aria-pressed={sizeIndex === i}
-          onclick={() => (sizeIndex = i)}
-        >
-          <span class="dot" style="--d:{4 + i * 3}px"></span>
-        </button>
-      {/each}
-    </div>
-
     <div class="group">
       <button class="icon" title="Undo ({mod}Z)" aria-label="Undo" disabled={!past.length} onclick={undo}>
         <svg viewBox="0 0 18 18"><path d="M5 8h7a3 3 0 010 6H9M5 8l3-3M5 8l3 3" /></svg>
@@ -307,11 +352,53 @@
       <button class="icon" title="Redo ({mod}⇧Z)" aria-label="Redo" disabled={!future.length} onclick={redo}>
         <svg viewBox="0 0 18 18"><path d="M13 8H6a3 3 0 000 6h3M13 8l-3-3M13 8l-3 3" /></svg>
       </button>
+      <button
+        class="icon"
+        title="Clear All ({mod}⌫)"
+        aria-label="Clear all"
+        disabled={!scene.shapes.length && !scene.crop}
+        onclick={clearAll}
+      >
+        <svg viewBox="0 0 18 18"><path d="M4 5h10M7.5 5V3.5h3V5M5.5 5l.7 9.5h5.6l.7-9.5" /></svg>
+      </button>
     </div>
+
+    <div class="group size" class:off={!sizeSpec}>
+      <label
+        title={sizeSpec ? `${sizeSpec.label} (1 2 3, [ ]; double-click to reset)` : "This tool has no size"}
+        ondblclick={() => sizeSpec && (sizes[tool] = sizeSpec.presets[1])}
+      >
+        <span class="muted">{sizeSpec?.label ?? "Size"}</span>
+        {#if sizeSpec}
+          <input type="range" min={sizeSpec.min} max={sizeSpec.max} step="1" bind:value={sizes[tool]} />
+          <span class="value">{sizes[tool]}</span>
+        {:else}
+          <input type="range" disabled />
+          <span class="value">–</span>
+        {/if}
+      </label>
+    </div>
+
+    {#if tool === "text"}
+      <div class="group">
+        <select aria-label="Font" bind:value={font}>
+          {#each Object.entries(FONTS) as [fid, f] (fid)}
+            <option value={fid}>{f.label}</option>
+          {/each}
+        </select>
+        <button class="icon" class:active={bold} title="Bold" aria-label="Bold" aria-pressed={bold} onclick={() => (bold = !bold)}>
+          <b>B</b>
+        </button>
+      </div>
+    {/if}
 
     <div class="spacer"></div>
 
     <div class="group actions">
+      <button bind:this={shareButton} title={isMac ? "Share (AirDrop, Messages, Mail…)" : "Share"} onclick={() => exportImage("share")}>
+        Share
+      </button>
+      <button title="Keep on screen ({mod}P)" onclick={() => exportImage("pin")}>Pin</button>
       <button title="Save As… ({mod}⇧S)" onclick={() => exportImage("saveas")}>Save As…</button>
       <button title="Save ({mod}S)" onclick={() => exportImage("save")}>Save</button>
       <button title="Save & Copy ({mod}⇧C)" onclick={() => exportImage("savecopy")}>Save & Copy</button>
@@ -337,7 +424,7 @@
           wrap="off"
           spellcheck="false"
           aria-label="Text"
-          style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:600 {textFontPx}px/1.25 {FONT}"
+          style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
           onkeydown={onTextKey}
           onblur={commitText}
         ></textarea>
@@ -408,11 +495,34 @@
     fill: currentColor;
     stroke: none;
   }
-  .dot {
-    width: var(--d);
-    height: var(--d);
-    border-radius: 50%;
-    background: currentColor;
+  .size label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .size.off {
+    opacity: 0.4;
+  }
+  .muted {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .size input {
+    width: 96px;
+    accent-color: var(--accent);
+  }
+  .value {
+    min-width: 2ch;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  select {
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    color: inherit;
+    padding: 0 6px;
   }
   .swatch {
     width: 22px;

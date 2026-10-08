@@ -273,6 +273,78 @@ pub fn show_toast(app: &AppHandle, b: &Bounds) -> tauri::Result<()> {
     Ok(())
 }
 
+const COUNTDOWN_W: f64 = 96.0;
+const COUNTDOWN_H: f64 = 64.0;
+
+/// Shows the timed-capture countdown in the bottom-right corner.
+pub fn show_countdown(app: &AppHandle, b: &Bounds, secs: u32) -> tauri::Result<WebviewWindow> {
+    if let Some(old) = app.get_webview_window("countdown") {
+        old.destroy()?;
+    }
+    let area = work_area(app, b);
+    let url = format!("countdown.html?s={secs}");
+    let win = WebviewWindowBuilder::new(app, "countdown", WebviewUrl::App(url.into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible_on_all_workspaces(true)
+        .inner_size(COUNTDOWN_W, COUNTDOWN_H)
+        .visible(false)
+        .build()?;
+    let x = area.x + area.w - area.n(COUNTDOWN_W + MARGIN);
+    let y = area.y + area.h - area.n(COUNTDOWN_H + MARGIN);
+    place(&win, &area, x, y, COUNTDOWN_W, COUNTDOWN_H);
+    Ok(win)
+}
+
+/// Pins a shot to the screen: a borderless window that stays on top, at
+/// `origin` (where the shot was taken) at its actual size when it fits.
+/// Returns the window label.
+pub fn open_pin(
+    app: &AppHandle,
+    id: u32,
+    b: &Bounds,
+    origin: Option<(i32, i32)>,
+    img_w: u32,
+    img_h: u32,
+) -> tauri::Result<String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!(
+        "pin-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let area = work_area(app, b);
+    let (max_w, max_h) = area.logical_size();
+    let (w, h) = (img_w as f64 / b.scale, img_h as f64 / b.scale);
+    let k = (max_w * 0.9 / w).min(max_h * 0.9 / h).min(1.0);
+    let (w, h) = ((w * k).max(24.0), (h * k).max(24.0));
+    let url = format!("pin.html?id={id}");
+    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .accept_first_mouse(true)
+        .visible_on_all_workspaces(true)
+        .inner_size(w, h)
+        .visible(false)
+        .build()?;
+    let (x, y) = match origin {
+        Some((x, y)) if k == 1.0 => (x as f64, y as f64),
+        _ => (
+            area.x + (area.w - area.n(w)) / 2.0,
+            area.y + (area.h - area.n(h)) / 2.0,
+        ),
+    };
+    place(&win, &area, x, y, w, h);
+    Ok(label)
+}
+
 /// Opens an editor for a shot. Returns the window label.
 pub fn open_editor(
     app: &AppHandle,
@@ -314,7 +386,7 @@ pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("KlikSnap Settings")
-        .inner_size(460.0, 720.0)
+        .inner_size(460.0, 756.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
