@@ -33,6 +33,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update packages; the app ships the matching public key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_name }}
           releaseName: KlikSnap ${{ github.ref_name }}
@@ -42,4 +45,5 @@ jobs:
 
             **Windows**: download `KlikSnap_*_x64-setup.exe` (or the `.msi`).
           releaseDraft: true
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

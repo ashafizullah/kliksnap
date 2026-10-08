@@ -167,8 +167,10 @@ mod imp {
 
         let bgra: Vec<u8> = img
             .as_raw()
-            .chunks_exact(4)
-            .flat_map(|p| [p[2], p[1], p[0], 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, _]| [b, g, r, 255])
             .collect();
         let writer = DataWriter::new()?;
         writer.WriteBytes(&bgra)?;

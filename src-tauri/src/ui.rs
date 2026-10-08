@@ -226,7 +226,7 @@ pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("KlikSnap Settings")
-        .inner_size(460.0, 640.0)
+        .inner_size(460.0, 720.0)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)

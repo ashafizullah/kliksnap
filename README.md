@@ -27,6 +27,7 @@
 - **Annotate**: arrow, line, rectangle, ellipse, text, highlighter, pixelate (blur), crop, undo/redo
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr)
 - Copies to the clipboard automatically; optional auto-save to a folder
+- **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
 The macOS app is about 4 MB per architecture (a 5 MB universal DMG) and uses about 15 MB of memory while idle.
 
@@ -64,7 +65,9 @@ npm run tauri dev      # run
 npm run tauri build    # bundle (.app/.dmg on macOS, .msi/.exe on Windows)
 ```
 
-CI runs type checks, `cargo fmt`, `clippy` and tests on macOS and Windows for every push and pull request. Pushing a `v*` tag builds the universal macOS DMG and the Windows installers and attaches them to a draft GitHub release.
+CI runs type checks, `cargo fmt`, `clippy` and tests on macOS and Windows for every push and pull request. Pushing a `v*` tag builds the universal macOS DMG and the Windows installers, signs the update packages and attaches everything (including `latest.json` for the in-app updater) to a draft GitHub release. Publish the draft to roll it out: installed apps only see published releases.
+
+Releases need the `TAURI_SIGNING_PRIVATE_KEY` repository secret. The matching public key is in `tauri.conf.json`. Bump `version` in `tauri.conf.json`, `Cargo.toml` and `package.json` before tagging.
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0

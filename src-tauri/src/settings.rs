@@ -17,6 +17,7 @@ pub struct Settings {
     /// Seconds before the floating preview hides itself; 0 keeps it open.
     pub preview_secs: u32,
     pub launch_at_login: bool,
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -31,6 +32,7 @@ impl Default for Settings {
             auto_save: false,
             preview_secs: 6,
             launch_at_login: false,
+            check_updates: true,
         }
     }
 }

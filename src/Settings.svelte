@@ -12,6 +12,7 @@
     auto_save: boolean;
     preview_secs: number;
     launch_at_login: boolean;
+    check_updates: boolean;
   };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text";
 
@@ -26,6 +27,17 @@
   let recording = $state<HotkeyField | null>(null);
   let error = $state("");
   let saved = $state(false);
+  let version = $state("");
+  let checking = $state(false);
+
+  async function checkNow() {
+    checking = true;
+    try {
+      await invoke("check_updates");
+    } finally {
+      checking = false;
+    }
+  }
 
   async function save() {
     if (!s) return;
@@ -89,7 +101,7 @@
   }
 
   onMount(async () => {
-    s = await invoke<Settings>("get_settings");
+    [s, version] = await Promise.all([invoke<Settings>("get_settings"), invoke<string>("app_version")]);
     await tick();
     ready();
   });
@@ -156,6 +168,16 @@
         <span>Launch at login</span>
         <input type="checkbox" bind:checked={s.launch_at_login} onchange={save} />
       </label>
+      <label class="row">
+        <span>Check for updates automatically</span>
+        <input type="checkbox" bind:checked={s.check_updates} onchange={save} />
+      </label>
+      <div class="row">
+        <span>Version {version}</span>
+        <button class="secondary" disabled={checking} onclick={checkNow}>
+          {checking ? "Checking…" : "Check Now"}
+        </button>
+      </div>
     </section>
 
     <footer>
@@ -164,7 +186,7 @@
       {:else if saved}
         <span class="ok">Saved</span>
       {:else}
-        <span>v0.1.0 · MIT License</span>
+        <span>Free & open source · MIT License</span>
       {/if}
     </footer>
   </main>

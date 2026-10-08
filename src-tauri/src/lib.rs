@@ -7,6 +7,7 @@ mod platform;
 mod settings;
 mod tray;
 mod ui;
+mod updater;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -255,6 +256,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .register_asynchronous_uri_scheme_protocol("ks", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let name = request.uri().path().trim_start_matches('/').to_string();
@@ -279,6 +281,7 @@ pub fn run() {
             if let Err(e) = hotkeys::register(app.handle(), &s) {
                 eprintln!("hotkeys: {e}");
             }
+            updater::start_background_checks(app.handle());
             if first_run {
                 let _ = settings::store(app.handle(), &s);
                 ui::open_settings(app.handle())?;
@@ -306,6 +309,8 @@ pub fn run() {
             commands::pick_folder,
             commands::capture,
             commands::toast_text,
+            commands::check_updates,
+            commands::app_version,
         ])
         .build(tauri::generate_context!())
         .expect("error while building KlikSnap")

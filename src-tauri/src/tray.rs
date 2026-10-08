@@ -30,6 +30,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item(app, "text", "Copy Text (OCR)", &s.hotkey_text)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, "settings", "Settings…", "")?,
+            &item(app, "update", "Check for Updates…", "")?,
             &item(app, "quit", "Quit KlikSnap", "")?,
         ],
     )
@@ -49,6 +50,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "text" => crate::start_capture(app, Mode::Text),
             "settings" => {
                 let _ = crate::ui::open_settings(app);
+            }
+            "update" => {
+                tauri::async_runtime::spawn(crate::updater::check(app.clone(), true));
             }
             "quit" => app.exit(0),
             _ => {}

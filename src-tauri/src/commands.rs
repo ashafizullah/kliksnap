@@ -34,6 +34,16 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
 }
 
 #[tauri::command]
+pub async fn check_updates(app: AppHandle) {
+    crate::updater::check(app, true).await;
+}
+
+#[tauri::command]
+pub fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
 pub fn toast_text(state: State<AppState>) -> String {
     state.toast.lock().unwrap().clone()
 }
