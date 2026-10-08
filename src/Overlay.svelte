@@ -140,10 +140,10 @@
 
   async function onImageLoad() {
     loaded = true;
-    // Show the window only once the capture is painted, or its black
-    // background flashes first.
-    await img.decode().catch(() => {});
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    // Show the window only once the capture is decoded, or its black
+    // background flashes first. Not requestAnimationFrame: it never fires
+    // while the window is hidden. The timeout guards against a stalled decode.
+    await Promise.race([img.decode().catch(() => {}), new Promise((r) => setTimeout(r, 300))]);
     ready();
   }
 </script>
