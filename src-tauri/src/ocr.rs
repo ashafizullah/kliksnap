@@ -1,10 +1,17 @@
-//! Text recognition with the OCR engine built into the OS (Apple Vision on
-//! macOS, Windows.Media.Ocr on Windows), so it adds nothing to the app size.
+//! Text and QR code recognition. Text uses the OCR engine built into the OS
+//! (Apple Vision on macOS, Windows.Media.Ocr on Windows), so it adds nothing to
+//! the app size. QR codes use Vision on macOS and `rqrr` on Windows, which has
+//! no built-in decoder.
 
 use xcap::image::RgbaImage;
 
 pub fn recognize(img: &RgbaImage) -> Result<String, String> {
     imp::recognize(img)
+}
+
+/// The payloads of the QR codes (and on macOS, other barcodes) in the image.
+pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
+    imp::scan_codes(img)
 }
 
 #[cfg(target_os = "macos")]
@@ -50,12 +57,27 @@ mod imp {
 
     const ALPHA_PREMULTIPLIED_LAST: u32 = 1;
     const REQUEST_ACCURATE: isize = 0;
+    /// On macOS 27 the default revision 3 accurate recognizer works only for the
+    /// first request in a process (later ones, at any revision, fail with
+    /// CRImageReaderError 1), and the app's warm-up is always that first one.
+    const REVISION: usize = 2;
 
     fn class(name: &CStr) -> Result<&'static AnyClass, String> {
         AnyClass::get(name).ok_or_else(|| format!("{name:?} is unavailable"))
     }
 
     pub fn recognize(img: &RgbaImage) -> Result<String, String> {
+        with_cg_image(img, |cg_image| unsafe { run_vision(cg_image) })
+    }
+
+    pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
+        with_cg_image(img, |cg_image| unsafe { run_barcodes(cg_image) })
+    }
+
+    fn with_cg_image<T>(
+        img: &RgbaImage,
+        f: impl FnOnce(*mut c_void) -> Result<T, String>,
+    ) -> Result<T, String> {
         let (w, h) = (img.width() as usize, img.height() as usize);
         let raw = img.as_raw();
         unsafe {
@@ -83,7 +105,7 @@ mod imp {
             let result = if cg_image.is_null() {
                 Err("could not create image".into())
             } else {
-                autoreleasepool(|_| run_vision(cg_image))
+                autoreleasepool(|_| f(cg_image))
             };
             for cf in [cg_image, provider, space] {
                 if !cf.is_null() {
@@ -94,8 +116,18 @@ mod imp {
         }
     }
 
+    /// The message of an `NSError`, or a generic one if there is none.
+    unsafe fn describe(error: *mut AnyObject) -> String {
+        if error.is_null() {
+            return "text recognition failed".into();
+        }
+        let message: *mut AnyObject = msg_send![error, localizedDescription];
+        to_string(message).unwrap_or_else(|| "text recognition failed".into())
+    }
+
     unsafe fn run_vision(cg_image: *mut c_void) -> Result<String, String> {
         let request: Retained<AnyObject> = msg_send![class(c"VNRecognizeTextRequest")?, new];
+        let _: () = msg_send![&*request, setRevision: REVISION];
         let _: () = msg_send![&*request, setRecognitionLevel: REQUEST_ACCURATE];
         let _: () = msg_send![&*request, setUsesLanguageCorrection: true];
         let auto_language: Bool =
@@ -104,37 +136,61 @@ mod imp {
             let _: () = msg_send![&*request, setAutomaticallyDetectsLanguage: true];
         }
 
-        let options: *mut AnyObject = msg_send![class(c"NSDictionary")?, dictionary];
-        let handler: Allocated<AnyObject> = msg_send![class(c"VNImageRequestHandler")?, alloc];
-        let handler: Retained<AnyObject> =
-            msg_send![handler, initWithCGImage: cg_image, options: options];
-        let requests: *mut AnyObject = msg_send![class(c"NSArray")?, arrayWithObject: &*request];
-        let mut error: *mut AnyObject = std::ptr::null_mut();
-        let ok: Bool = msg_send![&*handler, performRequests: requests, error: &mut error];
-        if !ok.as_bool() {
-            return Err("text recognition failed".into());
-        }
-
-        let observations: *mut AnyObject = msg_send![&*request, results];
-        if observations.is_null() {
-            return Ok(String::new());
-        }
-        let count: usize = msg_send![observations, count];
-        let mut lines = Vec::with_capacity(count);
-        for i in 0..count {
-            let observation: *mut AnyObject = msg_send![observations, objectAtIndex: i];
+        let mut lines = Vec::new();
+        for observation in perform(cg_image, &request)? {
             let candidates: *mut AnyObject = msg_send![observation, topCandidates: 1usize];
             let best: *mut AnyObject = msg_send![candidates, firstObject];
             if best.is_null() {
                 continue;
             }
             let string: *mut AnyObject = msg_send![best, string];
-            let utf8: *const std::ffi::c_char = msg_send![string, UTF8String];
-            if !utf8.is_null() {
-                lines.push(CStr::from_ptr(utf8).to_string_lossy().into_owned());
-            }
+            lines.extend(to_string(string));
         }
         Ok(lines.join("\n"))
+    }
+
+    unsafe fn run_barcodes(cg_image: *mut c_void) -> Result<Vec<String>, String> {
+        let request: Retained<AnyObject> = msg_send![class(c"VNDetectBarcodesRequest")?, new];
+        let mut codes = Vec::new();
+        for observation in perform(cg_image, &request)? {
+            let payload: *mut AnyObject = msg_send![observation, payloadStringValue];
+            codes.extend(to_string(payload));
+        }
+        Ok(codes)
+    }
+
+    /// Runs a Vision request on the image and returns its result observations.
+    unsafe fn perform(
+        cg_image: *mut c_void,
+        request: &AnyObject,
+    ) -> Result<Vec<*mut AnyObject>, String> {
+        let options: *mut AnyObject = msg_send![class(c"NSDictionary")?, dictionary];
+        let handler: Allocated<AnyObject> = msg_send![class(c"VNImageRequestHandler")?, alloc];
+        let handler: Retained<AnyObject> =
+            msg_send![handler, initWithCGImage: cg_image, options: options];
+        let requests: *mut AnyObject = msg_send![class(c"NSArray")?, arrayWithObject: request];
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let ok: Bool = msg_send![&*handler, performRequests: requests, error: &mut error];
+        if !ok.as_bool() {
+            return Err(describe(error));
+        }
+        let observations: *mut AnyObject = msg_send![request, results];
+        if observations.is_null() {
+            return Ok(Vec::new());
+        }
+        let count: usize = msg_send![observations, count];
+        Ok((0..count)
+            .map(|i| msg_send![observations, objectAtIndex: i])
+            .collect())
+    }
+
+    /// Copies an `NSString`, which may be nil.
+    unsafe fn to_string(string: *mut AnyObject) -> Option<String> {
+        if string.is_null() {
+            return None;
+        }
+        let utf8: *const std::ffi::c_char = msg_send![string, UTF8String];
+        (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
     }
 }
 
@@ -190,6 +246,23 @@ mod imp {
         }
         Ok(lines.join("\n"))
     }
+
+    pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
+        let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(
+            img.width() as usize,
+            img.height() as usize,
+            |x, y| {
+                let [r, g, b, _] = img.get_pixel(x as u32, y as u32).0;
+                ((r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000) as u8
+            },
+        );
+        Ok(prepared
+            .detect_grids()
+            .into_iter()
+            .filter_map(|grid| grid.decode().ok())
+            .map(|(_, content)| content)
+            .collect())
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -198,6 +271,10 @@ mod imp {
 
     pub fn recognize(_img: &RgbaImage) -> Result<String, String> {
         Err("text recognition is not supported on this platform".into())
+    }
+
+    pub fn scan_codes(_img: &RgbaImage) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
     }
 }
 
@@ -208,8 +285,25 @@ mod tests {
     fn recognizes_text() {
         let path = std::env::var("OCR_IMAGE").unwrap();
         let img = xcap::image::open(path).unwrap().to_rgba8();
-        let text = super::recognize(&img).unwrap();
-        println!("{text}");
-        assert!(!text.trim().is_empty());
+        // The app warms the engine up first, so the real request is never the first one.
+        let _ = super::recognize(&xcap::image::RgbaImage::new(64, 32));
+        for _ in 0..2 {
+            let text = super::recognize(&img).unwrap();
+            println!("{text}");
+            assert!(!text.trim().is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod qr_tests {
+    #[test]
+    #[ignore = "needs QR_IMAGE pointing at a PNG with a QR code"]
+    fn scans_qr_code() {
+        let path = std::env::var("QR_IMAGE").unwrap();
+        let img = xcap::image::open(path).unwrap().to_rgba8();
+        let codes = super::scan_codes(&img).unwrap();
+        println!("{codes:?}");
+        assert!(!codes.is_empty());
     }
 }

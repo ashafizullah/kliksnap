@@ -2,24 +2,22 @@
   import { onMount, tick } from "svelte";
   import { closeWindow, invoke, ready } from "./lib/api";
 
-  let text = $state("");
-  const failed = $derived(text === "No text found" || text.startsWith("Text recognition failed"));
+  // An empty `text` means nothing was copied and `title` says why.
+  let toast = $state({ title: "", text: "" });
 
   onMount(async () => {
-    text = await invoke<string>("toast_text");
+    toast = await invoke<{ title: string; text: string }>("toast_text");
     await tick();
     ready();
-    setTimeout(closeWindow, failed ? 2500 : 3500);
+    setTimeout(closeWindow, toast.text ? 3500 : 2500);
   });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="toast" onclick={closeWindow}>
-  {#if failed}
-    <strong>{text}</strong>
-  {:else}
-    <strong>Text copied</strong>
-    <p>{text}</p>
+  <strong>{toast.title}</strong>
+  {#if toast.text}
+    <p>{toast.text}</p>
   {/if}
 </div>
 

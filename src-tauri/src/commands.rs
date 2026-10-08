@@ -24,8 +24,18 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
             .is_some_and(|f| f.bounds.contains(platform::cursor_pos()));
         if under_cursor || frozen.len() == 1 {
             let _ = window.set_focus();
+            let mode = *state.mode.lock().unwrap();
+            if mode != Mode::Window {
+                let _ = window.run_on_main_thread(platform::activate_with_crosshair);
+            }
+            if mode == Mode::Text {
+                // The OS loads its OCR model on first use, which can take many
+                // seconds; start that now while the user is still selecting.
+                // Not earlier: it competes with capturing and painting the overlay.
+                std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
+            }
         }
-    } else if label == "preview" || label == "toast" {
+    } else if label.starts_with("preview-") || label == "toast" {
         platform::show_inactive(&window);
     } else {
         let _ = window.show();
@@ -44,7 +54,7 @@ pub fn app_version(app: AppHandle) -> String {
 }
 
 #[tauri::command]
-pub fn toast_text(state: State<AppState>) -> String {
+pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
 }
 
@@ -145,7 +155,7 @@ pub fn edit_shot(app: AppHandle, id: u32, state: State<AppState>) -> Result<(), 
         ui::open_editor(&app, id, &bounds, img.width(), img.height()).map_err(|e| e.to_string())?;
     state.retain(id);
     state.editor_shots.lock().unwrap().insert(label, id);
-    if let Some(preview) = app.get_webview_window("preview") {
+    if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
         let _ = preview.destroy();
     }
     Ok(())
@@ -178,6 +188,10 @@ pub async fn export_image(app: AppHandle, request: Request<'_>) -> Result<Option
     let path = match meta.action.as_str() {
         "copy" => return output::copy(&img).map(|_| None),
         "save" => output::unique_path(&dir, &output::file_name()),
+        "savecopy" => {
+            output::copy(&img)?;
+            output::unique_path(&dir, &output::file_name())
+        }
         "saveas" => {
             let Some(picked) = app
                 .dialog()

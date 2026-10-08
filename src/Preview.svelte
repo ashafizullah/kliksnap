@@ -5,9 +5,9 @@
 
   const secs = Number(param("t") ?? 6);
 
-  let id = $state(Number(param("id")));
+  const id = Number(param("id"));
   let status = $state("");
-  let hovering = false;
+  let hovering = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let shown = false;
 
@@ -21,29 +21,38 @@
     setTimeout(() => (status = ""), 1600);
   }
 
-  async function run(action: () => Promise<unknown>, done: string) {
+  /** Runs the action and closes the preview, or shows why it failed. */
+  async function run(action: () => Promise<unknown>) {
     try {
       await action();
-      flash(done);
+      closeWindow();
     } catch (e) {
       flash(String(e));
     }
   }
 
-  const copy = () => run(() => invoke("copy_shot", { id }), "Copied");
-  const save = () => run(() => invoke("save_shot", { id }), "Saved");
+  const copy = () => run(() => invoke("copy_shot", { id }));
+  const save = () => run(() => invoke("save_shot", { id }));
+  const saveCopy = () => run(async () => {
+    await invoke("copy_shot", { id });
+    await invoke("save_shot", { id });
+  });
   const edit = () => invoke("edit_shot", { id });
 
+  function setHover(on: boolean) {
+    if (on === hovering) return;
+    hovering = on;
+    if (on) clearTimeout(timer);
+    else schedule();
+  }
+
   onMount(() => {
-    const unlisten = listen<number>("preview:shot", (e) => {
-      id = e.payload;
-      status = "";
-      schedule();
-    });
+    // Sent by Rust: the webview gets no mouse-move events while unfocused.
+    const unlistenHover = listen<boolean>("preview:hover", (e) => setHover(e.payload));
     schedule();
     return () => {
       clearTimeout(timer);
-      unlisten.then((f) => f());
+      unlistenHover.then((f) => f());
     };
   });
 
@@ -57,8 +66,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="card"
-  onmouseenter={() => ((hovering = true), clearTimeout(timer))}
-  onmouseleave={() => ((hovering = false), schedule())}
+  class:hover={hovering}
+  onmouseenter={() => setHover(true)}
+  onmouseleave={() => setHover(false)}
 >
   <img src={imageUrl(`shot-${id}`)} alt="Screenshot" draggable="false" onload={onLoad} onerror={closeWindow} />
 
@@ -71,6 +81,7 @@
       <button onclick={copy}>Copy</button>
       <button onclick={save}>Save</button>
     </div>
+    <button class="wide" onclick={saveCopy}>Save & Copy</button>
   </div>
 
   {#if status}
@@ -106,7 +117,8 @@
     opacity: 0;
     transition: opacity 0.12s;
   }
-  .card:hover .actions {
+  .card:hover .actions,
+  .card.hover .actions {
     opacity: 1;
   }
   button {
@@ -120,10 +132,13 @@
   button:hover {
     background: #fff;
   }
+  .edit,
+  .wide {
+    min-width: 132px;
+  }
   .edit {
     background: #2563eb;
     color: #fff;
-    min-width: 132px;
   }
   .edit:hover {
     background: #1d4ed8;

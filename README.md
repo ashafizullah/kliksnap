@@ -29,7 +29,7 @@
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
 - **Floating preview** after each capture: copy, save, or open the editor
 - **Annotate**: arrow, line, rectangle, ellipse, text, highlighter, pixelate (blur), crop, undo/redo
-- **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr)
+- **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr). If the selection holds a QR code, its content is copied instead
 - Copies to the clipboard automatically; optional auto-save to a folder
 - **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
@@ -91,7 +91,7 @@ git tag v0.1.0 && git push origin v0.1.0
 src-tauri/src/
   lib.rs        app state, capture flow, ks:// protocol
   capture.rs    screen/window capture (xcap), cropping
-  ocr.rs        Apple Vision / Windows.Media.Ocr
+  ocr.rs        Apple Vision / Windows.Media.Ocr, QR codes
   ui.rs         window creation and placement
   commands.rs   commands called from the webviews
   output.rs     clipboard, PNG saving

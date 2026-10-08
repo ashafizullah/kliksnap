@@ -186,7 +186,8 @@
     return Math.max(textFontPx * 2, widest + textFontPx);
   });
 
-  async function exportImage(action: "copy" | "save" | "saveas") {
+  /** Exports the annotated image and closes the editor, unless Save As is cancelled. */
+  async function exportImage(action: "copy" | "save" | "saveas" | "savecopy") {
     if (!base) return;
     if (text) commitText();
     try {
@@ -194,8 +195,7 @@
       const path = await invoke<string | null>("export_image", bytes, {
         headers: { "x-ks": JSON.stringify({ action, width, height }) },
       });
-      if (action === "copy") flash("Copied to clipboard");
-      else if (path) flash(`Saved to ${path}`);
+      if (action === "copy" || path) closeWindow();
     } catch (e) {
       flash(`Export failed: ${e}`);
     }
@@ -208,7 +208,7 @@
       const action: Record<string, () => void> = {
         z: () => (e.shiftKey ? redo() : undo()),
         y: redo,
-        c: () => exportImage("copy"),
+        c: () => exportImage(e.shiftKey ? "savecopy" : "copy"),
         s: () => exportImage(e.shiftKey ? "saveas" : "save"),
         w: closeWindow,
       };
@@ -314,6 +314,7 @@
     <div class="group actions">
       <button title="Save As… ({mod}⇧S)" onclick={() => exportImage("saveas")}>Save As…</button>
       <button title="Save ({mod}S)" onclick={() => exportImage("save")}>Save</button>
+      <button title="Save & Copy ({mod}⇧C)" onclick={() => exportImage("savecopy")}>Save & Copy</button>
       <button class="primary" title="Copy ({mod}C)" onclick={() => exportImage("copy")}>Copy</button>
     </div>
   </header>

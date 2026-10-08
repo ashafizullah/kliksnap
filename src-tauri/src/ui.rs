@@ -130,20 +130,50 @@ pub fn overlays(app: &AppHandle) -> Vec<WebviewWindow> {
 
 const PREVIEW_W: f64 = 248.0;
 const PREVIEW_H: f64 = 168.0;
+const PREVIEW_GAP: f64 = 10.0;
+const MAX_PREVIEWS: usize = 5;
 const MARGIN: f64 = 16.0;
 
-/// Shows the floating preview in the bottom-right corner, reusing it if open.
+pub fn preview_label(id: u32) -> String {
+    format!("preview-{id}")
+}
+
+pub fn previews(app: &AppHandle) -> Vec<WebviewWindow> {
+    app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("preview-"))
+        .map(|(_, w)| w)
+        .collect()
+}
+
+/// How many previews fit stacked in the work area, up to `MAX_PREVIEWS`.
+pub fn previews_that_fit(app: &AppHandle, b: &Bounds) -> usize {
+    let area = work_area(app, b);
+    let (_, h) = area.logical_size();
+    let fit = ((h - 2.0 * MARGIN + PREVIEW_GAP) / (PREVIEW_H + PREVIEW_GAP)) as usize;
+    fit.clamp(1, MAX_PREVIEWS)
+}
+
+/// Stacks the previews (oldest first) up from the bottom-right corner, newest at the bottom.
+pub fn stack_previews(app: &AppHandle, ids: &[u32], b: &Bounds) {
+    let area = work_area(app, b);
+    let x = area.x + area.w - area.n(PREVIEW_W + MARGIN);
+    for (slot, id) in ids.iter().rev().enumerate() {
+        if let Some(win) = app.get_webview_window(&preview_label(*id)) {
+            let up = PREVIEW_H + MARGIN + slot as f64 * (PREVIEW_H + PREVIEW_GAP);
+            let y = area.y + area.h - area.n(up);
+            place(&win, &area, x, y, PREVIEW_W, PREVIEW_H);
+        }
+    }
+}
+
+/// Opens a floating preview for a shot; `stack_previews` positions it.
 pub fn show_preview(app: &AppHandle, id: u32, b: &Bounds, secs: u32) -> tauri::Result<()> {
     let area = work_area(app, b);
     let x = area.x + area.w - area.n(PREVIEW_W + MARGIN);
     let y = area.y + area.h - area.n(PREVIEW_H + MARGIN);
-    if let Some(win) = app.get_webview_window("preview") {
-        place(&win, &area, x, y, PREVIEW_W, PREVIEW_H);
-        win.emit_to("preview", "preview:shot", id)?;
-        return win.show();
-    }
     let url = format!("preview.html?id={id}&t={secs}");
-    let win = WebviewWindowBuilder::new(app, "preview", WebviewUrl::App(url.into()))
+    let win = WebviewWindowBuilder::new(app, preview_label(id), WebviewUrl::App(url.into()))
         .title("KlikSnap")
         .decorations(false)
         .resizable(false)
@@ -156,7 +186,64 @@ pub fn show_preview(app: &AppHandle, id: u32, b: &Bounds, secs: u32) -> tauri::R
         .visible(false)
         .build()?;
     place(&win, &area, x, y, PREVIEW_W, PREVIEW_H);
+    track_hover(win);
     Ok(())
+}
+
+/// Reports whether the cursor is over the window as `preview:hover` events.
+/// The preview never takes focus, and an unfocused webview (always so on
+/// macOS) gets no mouse-move events, so CSS `:hover` alone never fires.
+fn track_hover(win: WebviewWindow) {
+    std::thread::spawn(move || {
+        let mut inside = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let Some(now) = cursor_inside(&win) else {
+                return; // window destroyed
+            };
+            if now != inside {
+                inside = now;
+                let _ = win.emit_to(win.label(), "preview:hover", inside);
+            }
+        }
+    });
+}
+
+/// `None` once the window is gone.
+fn cursor_inside(win: &WebviewWindow) -> Option<bool> {
+    let pos = win.outer_position().ok()?;
+    let size = win.outer_size().ok()?;
+    let visible = win.is_visible().ok()?;
+    let Ok(cursor) = win.cursor_position() else {
+        return Some(false);
+    };
+    let (cx, cy, x, y, w, h) = if cfg!(target_os = "macos") {
+        // The cursor is scaled by the primary monitor, the window by its own.
+        let primary = win
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map_or(1.0, |m| m.scale_factor());
+        let s = win.scale_factor().ok()?;
+        (
+            cursor.x / primary,
+            cursor.y / primary,
+            pos.x as f64 / s,
+            pos.y as f64 / s,
+            size.width as f64 / s,
+            size.height as f64 / s,
+        )
+    } else {
+        (
+            cursor.x,
+            cursor.y,
+            pos.x as f64,
+            pos.y as f64,
+            size.width as f64,
+            size.height as f64,
+        )
+    };
+    Some(visible && cx >= x && cx < x + w && cy >= y && cy < y + h)
 }
 
 const TOAST_W: f64 = 300.0;

@@ -71,13 +71,43 @@ mod imp {
         });
     }
 
-    /// Shows a window without stealing focus from the app the user is in.
+    /// Makes KlikSnap the active app and shows the crosshair right away. The
+    /// focus tao gives the overlay uses `activateIgnoringOtherApps:`, which
+    /// macOS 14+ may ignore; until the app is active the webview's CSS cursor
+    /// doesn't apply and the pointer stays an arrow.
+    pub fn activate_with_crosshair() {
+        unsafe {
+            let Some(app_class) = AnyClass::get(c"NSApplication") else {
+                return;
+            };
+            let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+            let can_activate: bool = msg_send![app, respondsToSelector: objc2::sel!(activate)];
+            if can_activate {
+                let _: () = msg_send![app, activate];
+            }
+            if let Some(cursor_class) = AnyClass::get(c"NSCursor") {
+                let cursor: *mut AnyObject = msg_send![cursor_class, crosshairCursor];
+                let _: () = msg_send![cursor, set];
+            }
+        }
+    }
+
+    /// Shows a window without stealing focus from the app the user is in,
+    /// and keeps it in the corner of every Space, full-screen apps included,
+    /// so switching desktops doesn't leave it behind.
     pub fn show_inactive(win: &WebviewWindow) {
         let win = win.clone();
         let _ = win.clone().run_on_main_thread(move || {
             let Ok(ptr) = win.ns_window() else { return };
             let ns_window = unsafe { &*(ptr as *const AnyObject) };
-            let _: () = unsafe { msg_send![ns_window, orderFrontRegardless] };
+            const STATUS_LEVEL: isize = 25;
+            // canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
+            const BEHAVIOR: usize = 1 << 0 | 1 << 4 | 1 << 6 | 1 << 8;
+            unsafe {
+                let _: () = msg_send![ns_window, setLevel: STATUS_LEVEL];
+                let _: () = msg_send![ns_window, setCollectionBehavior: BEHAVIOR];
+                let _: () = msg_send![ns_window, orderFrontRegardless];
+            }
         });
     }
 
@@ -142,6 +172,7 @@ mod imp {
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
+    pub fn activate_with_crosshair() {}
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }
@@ -161,6 +192,7 @@ mod imp {
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
+    pub fn activate_with_crosshair() {}
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }

@@ -38,8 +38,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::include_image!("icons/tray.png"))
-        .icon_as_template(true)
+        .icon(tauri::include_image!("icons/64x64.png"))
         .tooltip("KlikSnap")
         .menu(&menu(app)?)
         .show_menu_on_left_click(true)
