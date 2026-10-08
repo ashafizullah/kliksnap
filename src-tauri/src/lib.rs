@@ -36,6 +36,10 @@ pub struct AppState {
     hidden_previews: Mutex<Vec<WebviewWindow>>,
     editor_shots: Mutex<HashMap<String, u32>>,
     busy: AtomicBool,
+    /// Live selection: overlay window numbers by monitor, for the loupe.
+    overlay_ids: Mutex<HashMap<usize, u32>>,
+    /// Live selection: the overlays let the wheel through to the apps below.
+    passing_scroll: AtomicBool,
     settings: Mutex<settings::Settings>,
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
     toast: Mutex<Toast>,
@@ -61,6 +65,8 @@ impl AppState {
             hidden_previews: Mutex::default(),
             editor_shots: Mutex::default(),
             busy: AtomicBool::new(false),
+            passing_scroll: AtomicBool::new(false),
+            overlay_ids: Mutex::default(),
             settings: Mutex::new(settings),
             hotkeys: Mutex::default(),
             toast: Mutex::default(),
@@ -132,13 +138,18 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
     if mode == Mode::Screen {
         let frozen = capture::freeze_at(platform::cursor_pos())?;
         state.busy.store(false, Ordering::SeqCst);
-        return finish_shot(app, frozen.img, frozen.bounds);
+        return finish_shot(app, frozen.img.unwrap_or_default(), frozen.bounds);
     }
-    let frozen = capture::freeze_all()?;
+    let frozen = if state.settings().live_selection {
+        capture::monitors()?
+    } else {
+        capture::freeze_all()?
+    };
     let bounds: Vec<Bounds> = frozen.iter().map(|f| f.bounds).collect();
     let generation = state.frozen_gen.fetch_add(1, Ordering::SeqCst) + 1;
     *state.frozen.lock().unwrap() = frozen;
     *state.window_rects.lock().unwrap() = None;
+    state.overlay_ids.lock().unwrap().clear();
     *state.mode.lock().unwrap() = mode;
     platform::remember_frontmost();
     for (i, b) in bounds.iter().enumerate() {
@@ -155,18 +166,35 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         let _ = win.destroy();
     }
     platform::restore_frontmost();
-    state.busy.store(false, Ordering::SeqCst);
-    reveal_previews(app);
-    let Some((index, rect)) = selection else {
+    let f = selection.and_then(|(index, rect)| Some((frozen.into_iter().nth(index)?, rect)));
+    let Some((f, rect)) = f else {
+        state.busy.store(false, Ordering::SeqCst);
+        reveal_previews(app);
         return;
     };
-    let Some(f) = frozen.into_iter().nth(index) else {
-        return;
-    };
+    let live = f.img.is_none();
+    if !live {
+        state.busy.store(false, Ordering::SeqCst);
+        reveal_previews(app);
+    }
     let mode = *state.mode.lock().unwrap();
     let app = app.clone();
     std::thread::spawn(move || {
-        let Some(img) = capture::crop(&f.img, rect) else {
+        let screen = match f.img {
+            Some(img) => img,
+            None => {
+                // Give the overlays time to leave the screen.
+                std::thread::sleep(Duration::from_millis(150));
+                let shot = capture::capture_monitor(&f.bounds);
+                app.state::<AppState>().busy.store(false, Ordering::SeqCst);
+                reveal_previews(&app);
+                match shot {
+                    Ok(img) => img,
+                    Err(e) => return eprintln!("capture failed: {e}"),
+                }
+            }
+        };
+        let Some(img) = capture::crop(&screen, rect) else {
             return;
         };
         let result = if mode == Mode::Text {
@@ -274,7 +302,7 @@ fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     match kind {
         "frozen" => {
             let frozen = state.frozen.lock().unwrap();
-            Some(output::bmp(&frozen.get(n as usize)?.img))
+            Some(output::bmp(frozen.get(n as usize)?.img.as_ref()?))
         }
         "shot" => Some(output::bmp(&state.shot(n)?.0)),
         _ => None,
@@ -373,6 +401,9 @@ pub fn run() {
             commands::overlay_info,
             commands::overlay_windows,
             commands::overlay_finish,
+            commands::overlay_pass_scroll,
+            commands::overlay_cursor,
+            commands::overlay_loupe,
             commands::shot_info,
             commands::copy_shot,
             commands::save_shot,

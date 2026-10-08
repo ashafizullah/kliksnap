@@ -44,7 +44,8 @@ impl Bounds {
 
 pub struct Frozen {
     pub bounds: Bounds,
-    pub img: RgbaImage,
+    /// None in live selection: the screen is captured when the selection ends.
+    pub img: Option<RgbaImage>,
 }
 
 pub struct Shot {
@@ -63,7 +64,7 @@ pub fn freeze_all() -> Result<Vec<Frozen>, String> {
         let img = m.capture_image().map_err(|e| e.to_string())?;
         out.push(Frozen {
             bounds: Bounds::of(m)?,
-            img,
+            img: Some(img),
         });
     }
     if out.is_empty() {
@@ -84,8 +85,36 @@ pub fn freeze_at(point: (i32, i32)) -> Result<Frozen, String> {
     let img = m.capture_image().map_err(|e| e.to_string())?;
     Ok(Frozen {
         bounds: Bounds::of(&m)?,
-        img,
+        img: Some(img),
     })
+}
+
+/// Every monitor's bounds, without capturing it.
+pub fn monitors() -> Result<Vec<Frozen>, String> {
+    let monitors = Monitor::all().map_err(|e| e.to_string())?;
+    let out = monitors
+        .iter()
+        .map(|m| {
+            Ok(Frozen {
+                bounds: Bounds::of(m)?,
+                img: None,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if out.is_empty() {
+        return Err("no monitors found".into());
+    }
+    Ok(out)
+}
+
+/// Captures the monitor at `b` now.
+pub fn capture_monitor(b: &Bounds) -> Result<RgbaImage, String> {
+    let m = Monitor::all()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|m| m.x().ok() == Some(b.x) && m.y().ok() == Some(b.y))
+        .ok_or("monitor disconnected")?;
+    m.capture_image().map_err(|e| e.to_string())
 }
 
 #[cfg(target_os = "macos")]
@@ -139,6 +168,42 @@ pub fn relative_rects(rects: &[Rect], b: &Bounds) -> Vec<[f64; 4]> {
             ]
         })
         .collect()
+}
+
+/// The screen under a live-selection overlay in `rect` (fractions of monitor
+/// `b`), without the overlay. `overlay` is its window number on macOS.
+pub fn under_overlay(b: &Bounds, overlay: u32, [fx, fy, fw, fh]: [f64; 4]) -> Option<RgbaImage> {
+    let (bw, bh) = (b.w as f64, b.h as f64);
+    let (x, y, w, h) = (b.x as f64 + fx * bw, b.y as f64 + fy * bh, fw * bw, fh * bh);
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::capture_below(overlay, (x, y, w, h))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = overlay;
+        let (x, y) = (x.round() as i32, y.round() as i32);
+        let (w, h) = (w.round().max(1.0) as i32, h.round().max(1.0) as i32);
+        // Capture the part on the monitor, and leave the rest transparent.
+        let (x0, y0) = (x.max(b.x), y.max(b.y));
+        let x1 = (x + w).min(b.x + b.w as i32);
+        let y1 = (y + h).min(b.y + b.h as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let m = Monitor::from_point(b.x, b.y).ok()?;
+        let part = m
+            .capture_region(
+                (x0 - b.x) as u32,
+                (y0 - b.y) as u32,
+                (x1 - x0) as u32,
+                (y1 - y0) as u32,
+            )
+            .ok()?;
+        let mut full = RgbaImage::new(w as u32, h as u32);
+        imageops::replace(&mut full, &part, (x0 - x) as i64, (y0 - y) as i64);
+        Some(full)
+    }
 }
 
 /// Crops by a rectangle given as fractions of the image size.

@@ -16,9 +16,11 @@
   let mouse = $state({ x: -1, y: -1 });
   let dragStart = $state<{ x: number; y: number } | null>(null);
   let viewport = $state({ w: innerWidth, h: innerHeight });
-  let img: HTMLImageElement;
+  let img = $state<HTMLImageElement>()!;
   let loupe = $state<HTMLCanvasElement>();
   let loaded = $state(false);
+  // Live selection shows the screen itself through the window; null until known.
+  let live = $state<boolean | null>(null);
   let done = false;
 
   const selection: Rect | null = $derived(
@@ -77,14 +79,33 @@
     dragStart = { x: e.clientX, y: e.clientY };
   }
 
+  let lastMove = 0;
+
   function onPointerMove(e: PointerEvent) {
+    lastMove = performance.now();
     mouse = { x: e.clientX, y: e.clientY };
+  }
+
+  // The webview gets no mouse moves until KlikSnap is the active app, which
+  // can lag behind the overlay showing, nor while the wheel passes through.
+  // Until they flow, follow the cursor from Rust so the guides still show.
+  async function followCursor() {
+    if (done || performance.now() - lastMove < 150) return;
+    const p = await invoke<[number, number] | null>("overlay_cursor", { index });
+    if (performance.now() - lastMove < 150) return;
+    // Off this monitor: hide the guides here, they show on the cursor's monitor.
+    mouse = p ? { x: p[0] * viewport.w, y: p[1] * viewport.h } : { x: -1, y: -1 };
   }
 
   function onPointerUp() {
     if (!selecting || !selection) return;
     if (selection.w >= 3 && selection.h >= 3) finish(selection);
     else dragStart = null;
+  }
+
+  // Live selection: scroll the app under the cursor, not the overlay.
+  function onWheel() {
+    if (live && !dragStart) invoke("overlay_pass_scroll");
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -97,24 +118,46 @@
 
   // Magnifier for pixel-precise selection.
   $effect(() => {
-    if (!loupe || !loaded || !selecting || mouse.x < 0) return;
+    if (!loupe || !loaded || live || !selecting || mouse.x < 0) return;
+    const span = LOUPE / ZOOM;
+    paintLoupe(img, (mouse.x - span / 2) * pxRatio, (mouse.y - span / 2) * pxRatio, span * pxRatio, span * pxRatio);
+  });
+
+  // Live selection has no still to magnify: keep fetching the screen under the loupe.
+  async function liveLoupe() {
+    const scratch = document.createElement("canvas");
+    while (!done) {
+      if (loupe && selecting && mouse.x >= 0) {
+        const span = LOUPE / ZOOM;
+        const rect = [
+          (mouse.x - span / 2) / viewport.w,
+          (mouse.y - span / 2) / viewport.h,
+          span / viewport.w,
+          span / viewport.h,
+        ];
+        const buf = await invoke<ArrayBuffer>("overlay_loupe", { index, rect });
+        const head = new DataView(buf);
+        const w = head.getUint32(0, true);
+        const h = head.getUint32(4, true);
+        if (w && h && loupe) {
+          scratch.width = w;
+          scratch.height = h;
+          scratch.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(buf, 8, w * h * 4), w, h), 0, 0);
+          paintLoupe(scratch, 0, 0, w, h);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
+
+  function paintLoupe(source: CanvasImageSource, sx: number, sy: number, sw: number, sh: number) {
+    if (!loupe) return;
     const ctx = loupe.getContext("2d")!;
     const dpr = devicePixelRatio;
     loupe.width = LOUPE * dpr;
     loupe.height = LOUPE * dpr;
     ctx.imageSmoothingEnabled = false;
-    const span = LOUPE / ZOOM;
-    ctx.drawImage(
-      img,
-      (mouse.x - span / 2) * pxRatio,
-      (mouse.y - span / 2) * pxRatio,
-      span * pxRatio,
-      span * pxRatio,
-      0,
-      0,
-      loupe.width,
-      loupe.height,
-    );
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, loupe.width, loupe.height);
     const c = loupe.width / 2;
     ctx.strokeStyle = "rgba(37, 99, 235, 0.9)";
     ctx.lineWidth = dpr;
@@ -124,19 +167,30 @@
     ctx.moveTo(0, c);
     ctx.lineTo(loupe.width, c);
     ctx.stroke();
-  });
+  }
 
   const loupePos = $derived({
     x: mouse.x + 24 + LOUPE > viewport.w ? mouse.x - 24 - LOUPE : mouse.x + 24,
     y: mouse.y + 24 + LOUPE + 28 > viewport.h ? mouse.y - 24 - LOUPE - 28 : mouse.y + 24,
   });
 
-  onMount(async () => {
+  onMount(() => {
+    const timer = setInterval(followCursor, 30);
+    init();
+    return () => clearInterval(timer);
+  });
+
+  async function init() {
     const info = await invoke<{ mode: Mode | "screen"; width: number } | null>("overlay_info", { index });
     if (!info) return finish(null);
     imageWidth = info.width;
+    live = info.width === 0;
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
-  });
+    if (live) {
+      ready();
+      liveLoupe();
+    }
+  }
 
   async function onImageLoad() {
     loaded = true;
@@ -158,11 +212,15 @@
 <div
   class="stage"
   class:window-mode={mode === "window"}
+  class:live
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
+  onwheel={onWheel}
 >
-  <img bind:this={img} {src} alt="" crossorigin="anonymous" draggable="false" onload={onImageLoad} onerror={() => finish(null)} />
+  {#if live === false}
+    <img bind:this={img} {src} alt="" crossorigin="anonymous" draggable="false" onload={onImageLoad} onerror={() => finish(null)} />
+  {/if}
 
   {#if box}
     <div class="box" style="left:{box.x}px; top:{box.y}px; width:{box.w}px; height:{box.h}px">
@@ -190,13 +248,15 @@
       {mode === "area" ? "Drag to select" : "Click a window"} · <kbd>Space</kbd>
       {mode === "area" ? "window mode" : "area mode"}
     {/if}
+    {#if live}· Scroll works{/if}
     · <kbd>Esc</kbd> cancel
   </div>
 </div>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #000;
+    background: transparent;
   }
   .stage {
     position: fixed;
@@ -206,6 +266,10 @@
   }
   .stage.window-mode {
     cursor: default;
+  }
+  /* Fully transparent pixels let clicks through to the apps below. */
+  .stage.live {
+    background: rgba(0, 0, 0, 0.01);
   }
   img {
     position: absolute;

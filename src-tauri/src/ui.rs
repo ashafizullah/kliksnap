@@ -114,6 +114,7 @@ pub fn open_overlay(
             .shadow(false)
             .visible(false)
             .accept_first_mouse(true)
+            .transparent(true)
             .inner_size(w, h)
             .build()?;
     place(&win, &area, area.x, area.y, w, h);

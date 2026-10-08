@@ -1,7 +1,9 @@
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::ipc::{InvokeBody, Request};
+use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use xcap::image::RgbaImage;
@@ -19,6 +21,10 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
         let _ = window.show();
         let index: usize = index.parse().unwrap_or(0);
         let frozen = state.frozen.lock().unwrap();
+        if frozen.get(index).is_some_and(|f| f.img.is_none()) {
+            let id = platform::prepare_live_overlay(&window);
+            state.overlay_ids.lock().unwrap().insert(index, id);
+        }
         let under_cursor = frozen
             .get(index)
             .is_some_and(|f| f.bounds.contains(platform::cursor_pos()));
@@ -27,6 +33,7 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
             let mode = *state.mode.lock().unwrap();
             if mode != Mode::Window {
                 let _ = window.run_on_main_thread(platform::activate_with_crosshair);
+                keep_crosshair(window.clone());
             }
             if mode == Mode::Text {
                 // The OS loads its OCR model on first use, which can take many
@@ -41,6 +48,33 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// Sets the crosshair again until KlikSnap has become the active app, which
+/// macOS does asynchronously, then once more for good measure.
+fn keep_crosshair(window: WebviewWindow) {
+    std::thread::spawn(move || {
+        let mut after_active = 0;
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(25));
+            if !window.is_visible().unwrap_or(false) {
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            let sent = window.run_on_main_thread(move || {
+                let _ = tx.send(platform::set_crosshair_if_active());
+            });
+            if sent.is_err() {
+                return;
+            }
+            if rx.recv().unwrap_or(false) {
+                after_active += 1;
+                if after_active >= 4 {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -76,6 +110,7 @@ pub fn capture(app: AppHandle, mode: Mode) {
 #[derive(Serialize)]
 pub struct OverlayInfo {
     mode: Mode,
+    /// The still's size; 0 in live selection, which has none.
     width: u32,
     height: u32,
 }
@@ -86,8 +121,8 @@ pub fn overlay_info(index: usize, state: State<AppState>) -> Option<OverlayInfo>
     let f = frozen.get(index)?;
     Some(OverlayInfo {
         mode: *state.mode.lock().unwrap(),
-        width: f.img.width(),
-        height: f.img.height(),
+        width: f.img.as_ref().map_or(0, |i| i.width()),
+        height: f.img.as_ref().map_or(0, |i| i.height()),
     })
 }
 
@@ -103,6 +138,72 @@ pub async fn overlay_windows(
     let mut cached = state.window_rects.lock().unwrap();
     let rects = cached.get_or_insert_with(capture::window_rects);
     Ok(capture::relative_rects(rects, &bounds))
+}
+
+/// The cursor on monitor `index` as fractions of it, or None when it's elsewhere.
+#[tauri::command]
+pub fn overlay_cursor(index: usize, state: State<AppState>) -> Option<[f64; 2]> {
+    let b = state.frozen.lock().unwrap().get(index)?.bounds;
+    let p = platform::cursor_pos();
+    b.contains(p).then(|| {
+        [
+            (p.0 - b.x) as f64 / b.w as f64,
+            (p.1 - b.y) as f64 / b.h as f64,
+        ]
+    })
+}
+
+/// Live selection: the screen under the loupe, `rect` in fractions of monitor
+/// `index`, as width and height (u32 LE) followed by RGBA pixels; 0×0 if
+/// it couldn't be captured.
+#[tauri::command]
+pub async fn overlay_loupe(
+    index: usize,
+    rect: [f64; 4],
+    state: State<'_, AppState>,
+) -> Result<Response, ()> {
+    let bounds = state.frozen.lock().unwrap().get(index).map(|f| f.bounds);
+    let overlay = state.overlay_ids.lock().unwrap().get(&index).copied();
+    let img = bounds
+        .zip(overlay)
+        .and_then(|(b, overlay)| capture::under_overlay(&b, overlay, rect));
+    let (w, h) = img.as_ref().map_or((0, 0), |i| i.dimensions());
+    let mut out = Vec::with_capacity(8 + (w * h * 4) as usize);
+    out.extend_from_slice(&w.to_le_bytes());
+    out.extend_from_slice(&h.to_le_bytes());
+    if let Some(img) = img {
+        out.extend_from_slice(img.as_raw());
+    }
+    Ok(Response::new(out))
+}
+
+/// Live selection: lets the overlays through to the apps below while the
+/// user scrolls, so a page can be scrolled into place before selecting.
+#[tauri::command]
+pub fn overlay_pass_scroll(app: AppHandle, state: State<AppState>) {
+    if state.passing_scroll.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    for win in ui::overlays(&app) {
+        let _ = win.set_ignore_cursor_events(true);
+    }
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(30));
+            // Without a scroll clock, the overlays catch the next wheel tick and come back here.
+            let idle = platform::secs_since_scroll().unwrap_or(start.elapsed().as_secs_f64());
+            if idle > 0.2 {
+                break;
+            }
+        }
+        for win in ui::overlays(&app) {
+            let _ = win.set_ignore_cursor_events(false);
+        }
+        app.state::<AppState>()
+            .passing_scroll
+            .store(false, Ordering::SeqCst);
+    });
 }
 
 #[tauri::command]
