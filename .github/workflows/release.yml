@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target universal-apple-darwin
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: KlikSnap ${{ github.ref_name }}
+          releaseBody: |
+            **macOS** (Apple Silicon + Intel): download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications.
+            The app is not notarized yet: the first time, right-click KlikSnap → Open, or run `xattr -cr /Applications/KlikSnap.app`.
+
+            **Windows**: download `KlikSnap_*_x64-setup.exe` (or the `.msi`).
+          releaseDraft: true
+          args: ${{ matrix.args }}
