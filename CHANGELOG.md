@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.2.1
+
+### Fixes
+
+- Annotate not responding when clicked in the preview on Windows
+- The update dialog now shows what's new instead of install instructions
+
 ## 0.2.0
 
 ### New
