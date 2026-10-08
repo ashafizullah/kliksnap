@@ -71,6 +71,27 @@ mod imp {
         });
     }
 
+    /// Makes KlikSnap the active app and shows the crosshair right away. The
+    /// focus tao gives the overlay uses `activateIgnoringOtherApps:`, which
+    /// macOS 14+ may ignore; until the app is active the webview's CSS cursor
+    /// doesn't apply and the pointer stays an arrow.
+    pub fn activate_with_crosshair() {
+        unsafe {
+            let Some(app_class) = AnyClass::get(c"NSApplication") else {
+                return;
+            };
+            let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+            let can_activate: bool = msg_send![app, respondsToSelector: objc2::sel!(activate)];
+            if can_activate {
+                let _: () = msg_send![app, activate];
+            }
+            if let Some(cursor_class) = AnyClass::get(c"NSCursor") {
+                let cursor: *mut AnyObject = msg_send![cursor_class, crosshairCursor];
+                let _: () = msg_send![cursor, set];
+            }
+        }
+    }
+
     /// Shows a window without stealing focus from the app the user is in,
     /// and keeps it in the corner of every Space, full-screen apps included,
     /// so switching desktops doesn't leave it behind.
@@ -151,6 +172,7 @@ mod imp {
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
+    pub fn activate_with_crosshair() {}
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }
@@ -170,6 +192,7 @@ mod imp {
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
+    pub fn activate_with_crosshair() {}
     pub fn show_inactive(win: &WebviewWindow) {
         let _ = win.show();
     }

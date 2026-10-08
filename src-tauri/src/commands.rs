@@ -24,7 +24,11 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
             .is_some_and(|f| f.bounds.contains(platform::cursor_pos()));
         if under_cursor || frozen.len() == 1 {
             let _ = window.set_focus();
-            if *state.mode.lock().unwrap() == Mode::Text {
+            let mode = *state.mode.lock().unwrap();
+            if mode != Mode::Window {
+                let _ = window.run_on_main_thread(platform::activate_with_crosshair);
+            }
+            if mode == Mode::Text {
                 // The OS loads its OCR model on first use, which can take many
                 // seconds; start that now while the user is still selecting.
                 // Not earlier: it competes with capturing and painting the overlay.
