@@ -7,7 +7,7 @@
 
   let id = $state(Number(param("id")));
   let status = $state("");
-  let hovering = false;
+  let hovering = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let shown = false;
 
@@ -34,16 +34,26 @@
   const save = () => run(() => invoke("save_shot", { id }), "Saved");
   const edit = () => invoke("edit_shot", { id });
 
+  function setHover(on: boolean) {
+    if (on === hovering) return;
+    hovering = on;
+    if (on) clearTimeout(timer);
+    else schedule();
+  }
+
   onMount(() => {
     const unlisten = listen<number>("preview:shot", (e) => {
       id = e.payload;
       status = "";
       schedule();
     });
+    // Sent by Rust: the webview gets no mouse-move events while unfocused.
+    const unlistenHover = listen<boolean>("preview:hover", (e) => setHover(e.payload));
     schedule();
     return () => {
       clearTimeout(timer);
       unlisten.then((f) => f());
+      unlistenHover.then((f) => f());
     };
   });
 
@@ -57,8 +67,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="card"
-  onmouseenter={() => ((hovering = true), clearTimeout(timer))}
-  onmouseleave={() => ((hovering = false), schedule())}
+  class:hover={hovering}
+  onmouseenter={() => setHover(true)}
+  onmouseleave={() => setHover(false)}
 >
   <img src={imageUrl(`shot-${id}`)} alt="Screenshot" draggable="false" onload={onLoad} onerror={closeWindow} />
 
@@ -106,7 +117,8 @@
     opacity: 0;
     transition: opacity 0.12s;
   }
-  .card:hover .actions {
+  .card:hover .actions,
+  .card.hover .actions {
     opacity: 1;
   }
   button {

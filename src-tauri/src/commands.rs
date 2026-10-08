@@ -24,6 +24,12 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
             .is_some_and(|f| f.bounds.contains(platform::cursor_pos()));
         if under_cursor || frozen.len() == 1 {
             let _ = window.set_focus();
+            if *state.mode.lock().unwrap() == Mode::Text {
+                // The OS loads its OCR model on first use, which can take many
+                // seconds; start that now while the user is still selecting.
+                // Not earlier: it competes with capturing and painting the overlay.
+                std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
+            }
         }
     } else if label == "preview" || label == "toast" {
         platform::show_inactive(&window);
@@ -44,7 +50,7 @@ pub fn app_version(app: AppHandle) -> String {
 }
 
 #[tauri::command]
-pub fn toast_text(state: State<AppState>) -> String {
+pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
 }
 
@@ -178,6 +184,10 @@ pub async fn export_image(app: AppHandle, request: Request<'_>) -> Result<Option
     let path = match meta.action.as_str() {
         "copy" => return output::copy(&img).map(|_| None),
         "save" => output::unique_path(&dir, &output::file_name()),
+        "savecopy" => {
+            output::copy(&img)?;
+            output::unique_path(&dir, &output::file_name())
+        }
         "saveas" => {
             let Some(picked) = app
                 .dialog()

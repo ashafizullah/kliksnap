@@ -35,7 +35,14 @@ pub struct AppState {
     busy: AtomicBool,
     settings: Mutex<settings::Settings>,
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
-    toast: Mutex<String>,
+    toast: Mutex<Toast>,
+}
+
+/// The OCR result notice. An empty `text` means nothing was copied.
+#[derive(Clone, Default, serde::Serialize)]
+pub struct Toast {
+    title: String,
+    text: String,
 }
 
 impl AppState {
@@ -120,11 +127,6 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
         state.busy.store(false, Ordering::SeqCst);
         return finish_shot(app, frozen.img, frozen.bounds);
     }
-    if mode == Mode::Text {
-        // The OS loads its OCR model on first use, which can take many seconds;
-        // start that now while the user is still selecting.
-        std::thread::spawn(|| ocr::recognize(&RgbaImage::new(64, 32)));
-    }
     let frozen = capture::freeze_all()?;
     let bounds: Vec<Bounds> = frozen.iter().map(|f| f.bounds).collect();
     let generation = state.frozen_gen.fetch_add(1, Ordering::SeqCst) + 1;
@@ -170,18 +172,37 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
     });
 }
 
+/// Copies the QR codes in the selection, or if there are none, its text.
 fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), String> {
-    let message = match ocr::recognize(img) {
-        Ok(text) if text.trim().is_empty() => "No text found".to_string(),
+    let codes = ocr::scan_codes(img).unwrap_or_else(|e| {
+        eprintln!("QR scan failed: {e}");
+        Vec::new()
+    });
+    let (title, result) = if codes.is_empty() {
+        ("Text copied", ocr::recognize(img))
+    } else {
+        ("QR code copied", Ok(codes.join("\n")))
+    };
+    let toast = match result {
+        Ok(text) if text.trim().is_empty() => Toast {
+            title: "No text found".into(),
+            text: String::new(),
+        },
         Ok(text) => {
             arboard::Clipboard::new()
                 .and_then(|mut c| c.set_text(text.clone()))
                 .map_err(|e| e.to_string())?;
-            text
+            Toast {
+                title: title.into(),
+                text,
+            }
         }
-        Err(e) => format!("Text recognition failed: {e}"),
+        Err(e) => Toast {
+            title: format!("Text recognition failed: {e}"),
+            text: String::new(),
+        },
     };
-    *app.state::<AppState>().toast.lock().unwrap() = message;
+    *app.state::<AppState>().toast.lock().unwrap() = toast;
     ui::show_toast(app, bounds).map_err(|e| e.to_string())
 }
 

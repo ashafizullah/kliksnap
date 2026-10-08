@@ -138,8 +138,12 @@
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
   });
 
-  function onImageLoad() {
+  async function onImageLoad() {
     loaded = true;
+    // Show the window only once the capture is painted, or its black
+    // background flashes first.
+    await img.decode().catch(() => {});
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     ready();
   }
 </script>
