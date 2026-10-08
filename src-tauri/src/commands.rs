@@ -148,8 +148,10 @@ pub async fn save_shot(
     Ok(path.display().to_string())
 }
 
+/// Async because creating a window from a synchronous command deadlocks on
+/// Windows (the command runs on the main thread the window needs).
 #[tauri::command]
-pub fn edit_shot(app: AppHandle, id: u32, state: State<AppState>) -> Result<(), String> {
+pub async fn edit_shot(app: AppHandle, id: u32, state: State<'_, AppState>) -> Result<(), String> {
     let (img, bounds) = state.shot(id).ok_or("screenshot expired")?;
     let label =
         ui::open_editor(&app, id, &bounds, img.width(), img.height()).map_err(|e| e.to_string())?;
