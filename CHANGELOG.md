@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.4.0
+
+### New
+
+- Windows: the tray icon can be hidden (Settings → General); KlikSnap keeps running on its shortcuts, and opening it again brings up Settings
+- Opening KlikSnap while it is already running opens Settings instead of starting a second copy
+
 ## 0.3.0
 
 ### New
