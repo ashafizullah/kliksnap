@@ -7,6 +7,7 @@
     hotkey_window: string;
     hotkey_screen: string;
     hotkey_text: string;
+    print_screen: boolean;
     save_dir: string;
     auto_copy: boolean;
     auto_save: boolean;
@@ -73,6 +74,11 @@
     return [...mods, key].join("+");
   }
 
+  // Windows sends no keydown for Print Screen, only keyup.
+  function onRecordKeyUp(e: KeyboardEvent) {
+    if (e.code === "PrintScreen") onRecordKey(e);
+  }
+
   function onRecordKey(e: KeyboardEvent) {
     if (!recording || !s) return;
     e.preventDefault();
@@ -107,7 +113,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onRecordKey} />
+<svelte:window onkeydown={onRecordKey} onkeyup={onRecordKeyUp} />
 
 {#if s}
   <main>
@@ -131,6 +137,13 @@
         </div>
       {/each}
       <p class="hint">Click a shortcut, then press the new keys. Backspace clears it, Esc cancels.</p>
+      {#if !isMac}
+        <label class="row">
+          <span>Print Screen captures an area</span>
+          <input type="checkbox" bind:checked={s.print_screen} onchange={save} />
+        </label>
+        <p class="hint">Replaces the Snipping Tool on the Print Screen key.</p>
+      {/if}
     </section>
 
     <section>

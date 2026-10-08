@@ -231,8 +231,15 @@ pub fn save_settings(
     state: State<AppState>,
 ) -> Result<(), String> {
     let old = state.settings();
+    let print_screen_changed = settings.print_screen != old.print_screen;
+    if print_screen_changed {
+        platform::set_print_screen_opens_snipping(!settings.print_screen)?;
+    }
     if let Err(e) = hotkeys::register(&app, &settings) {
         let _ = hotkeys::register(&app, &old);
+        if print_screen_changed {
+            let _ = platform::set_print_screen_opens_snipping(!old.print_screen);
+        }
         return Err(e);
     }
     {

@@ -57,6 +57,8 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Capture screen | `⌥⇧3` / `Alt+Shift+3` |
 | Copy text (OCR) | `⌥⇧2` / `Alt+Shift+2` |
 
+On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` instead of the Snipping Tool.
+
 In area mode, press `Space` to switch to window mode and `Esc` to cancel. In the editor, use `A L R O T H P C` to pick a tool, `1 2 3` to set the size, `⌘C` to copy, `⌘S` to save and `⌘⇧S` for Save As.
 
 ## Development
