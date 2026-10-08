@@ -21,17 +21,22 @@
     setTimeout(() => (status = ""), 1600);
   }
 
-  async function run(action: () => Promise<unknown>, done: string) {
+  /** Runs the action and closes the preview, or shows why it failed. */
+  async function run(action: () => Promise<unknown>) {
     try {
       await action();
-      flash(done);
+      closeWindow();
     } catch (e) {
       flash(String(e));
     }
   }
 
-  const copy = () => run(() => invoke("copy_shot", { id }), "Copied");
-  const save = () => run(() => invoke("save_shot", { id }), "Saved");
+  const copy = () => run(() => invoke("copy_shot", { id }));
+  const save = () => run(() => invoke("save_shot", { id }));
+  const saveCopy = () => run(async () => {
+    await invoke("copy_shot", { id });
+    await invoke("save_shot", { id });
+  });
   const edit = () => invoke("edit_shot", { id });
 
   function setHover(on: boolean) {
@@ -76,6 +81,7 @@
       <button onclick={copy}>Copy</button>
       <button onclick={save}>Save</button>
     </div>
+    <button class="wide" onclick={saveCopy}>Save & Copy</button>
   </div>
 
   {#if status}
@@ -126,10 +132,13 @@
   button:hover {
     background: #fff;
   }
+  .edit,
+  .wide {
+    min-width: 132px;
+  }
   .edit {
     background: #2563eb;
     color: #fff;
-    min-width: 132px;
   }
   .edit:hover {
     background: #1d4ed8;
