@@ -4,9 +4,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
 
@@ -80,71 +80,110 @@ fn strip_inline(line: &str) -> String {
     out
 }
 
-fn notify(app: &AppHandle, kind: MessageDialogKind, message: String) {
-    app.dialog()
-        .message(message)
-        .title("KlikSnap")
-        .kind(kind)
-        .blocking_show();
+/// A message box, attached to `parent` when given so it stays with that
+/// window instead of sending KlikSnap (a menu bar app) to the background.
+fn notify(
+    app: &AppHandle,
+    kind: MessageDialogKind,
+    message: String,
+    parent: Option<&WebviewWindow>,
+) {
+    let mut dialog = app.dialog().message(message).title("KlikSnap").kind(kind);
+    if let Some(parent) = parent {
+        dialog = dialog.parent(parent);
+    }
+    dialog.blocking_show();
 }
 
-/// `manual` checks also report "up to date" and errors; background checks stay quiet.
-pub async fn check(app: AppHandle, manual: bool) {
+/// What a check found.
+pub enum Outcome {
+    UpToDate,
+    /// An update was found and offered in a dialog.
+    Offered,
+    /// Another check is still running.
+    Busy,
+}
+
+/// Checks for an update and offers it in a dialog attached to `parent`.
+pub async fn check_and_offer(
+    app: &AppHandle,
+    parent: Option<&WebviewWindow>,
+) -> Result<Outcome, String> {
     if CHECKING.swap(true, Ordering::SeqCst) {
-        return;
+        return Ok(Outcome::Busy);
     }
     let result = match app.updater() {
         Ok(updater) => updater.check().await,
         Err(e) => Err(e),
     };
-    match result {
+    let outcome = match result {
         Ok(Some(update)) => {
-            let notes = changelog(update.body.as_deref().unwrap_or(""));
-            let notes = if notes.chars().count() > 900 {
-                format!("{}…", notes.chars().take(900).collect::<String>())
-            } else {
-                notes
-            };
-            let message = format!(
-                "KlikSnap {} is available. You have {}.\n\n{notes}",
-                update.version, update.current_version
-            );
-            let install = app
-                .dialog()
-                .message(message.trim_end())
-                .title("Update available")
-                .buttons(MessageDialogButtons::OkCancelCustom(
-                    "Install and Restart".into(),
-                    "Later".into(),
-                ))
-                .blocking_show();
-            if install {
-                match update.download_and_install(|_, _| {}, || {}).await {
-                    Ok(()) => app.restart(),
-                    Err(e) => notify(
-                        &app,
-                        MessageDialogKind::Error,
-                        format!("The update could not be installed.\n\n{e}"),
-                    ),
-                }
-            }
+            offer(app, update, parent).await;
+            Ok(Outcome::Offered)
         }
-        Ok(None) if manual => notify(
+        Ok(None) => Ok(Outcome::UpToDate),
+        Err(e) => Err(e.to_string()),
+    };
+    CHECKING.store(false, Ordering::SeqCst);
+    outcome
+}
+
+async fn offer(app: &AppHandle, update: Update, parent: Option<&WebviewWindow>) {
+    let notes = changelog(update.body.as_deref().unwrap_or(""));
+    let notes = if notes.chars().count() > 900 {
+        format!("{}…", notes.chars().take(900).collect::<String>())
+    } else {
+        notes
+    };
+    let message = format!(
+        "KlikSnap {} is available. You have {}.\n\n{notes}",
+        update.version, update.current_version
+    );
+    let mut dialog = app
+        .dialog()
+        .message(message.trim_end())
+        .title("Update available")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Install and Restart".into(),
+            "Later".into(),
+        ));
+    if let Some(parent) = parent {
+        dialog = dialog.parent(parent);
+    }
+    if dialog.blocking_show() {
+        match update.download_and_install(|_, _| {}, || {}).await {
+            Ok(()) => app.restart(),
+            Err(e) => notify(
+                app,
+                MessageDialogKind::Error,
+                format!("The update could not be installed.\n\n{e}"),
+                parent,
+            ),
+        }
+    }
+}
+
+/// `manual` checks (from the tray) also report "up to date" and errors;
+/// background checks stay quiet.
+pub async fn check(app: AppHandle, manual: bool) {
+    match check_and_offer(&app, None).await {
+        Ok(Outcome::UpToDate) if manual => notify(
             &app,
             MessageDialogKind::Info,
             format!(
                 "You're up to date. KlikSnap {} is the latest version.",
                 app.package_info().version
             ),
+            None,
         ),
         Err(e) if manual => notify(
             &app,
             MessageDialogKind::Error,
             format!("Couldn't check for updates.\n\n{e}"),
+            None,
         ),
         _ => {}
     }
-    CHECKING.store(false, Ordering::SeqCst);
 }
 
 #[cfg(test)]

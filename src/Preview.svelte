@@ -38,6 +38,7 @@
     await invoke("save_shot", { id });
   });
   const edit = () => invoke("edit_shot", { id });
+  const pin = () => invoke("pin_shot", { id }).catch((e) => flash(String(e)));
 
   function setHover(on: boolean) {
     if (on === hovering) return;
@@ -80,6 +81,7 @@
     <div class="row">
       <button onclick={copy}>Copy</button>
       <button onclick={save}>Save</button>
+      <button title="Keep on screen" onclick={pin}>Pin</button>
     </div>
     <button class="wide" onclick={saveCopy}>Save & Copy</button>
   </div>

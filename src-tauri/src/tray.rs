@@ -1,4 +1,4 @@
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
 
@@ -20,7 +20,19 @@ fn item(
 }
 
 fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let s = app.state::<AppState>().settings();
+    let state = app.state::<AppState>();
+    let s = state.settings();
+    if state.recording.lock().unwrap().is_some() {
+        return Menu::with_items(
+            app,
+            &[
+                &item(app, "stop_record", "Stop Recording", &s.hotkey_record)?,
+                &PredefinedMenuItem::separator(app)?,
+                &item(app, "settings", "Settings…", "")?,
+                &item(app, "quit", "Quit KlikSnap", "")?,
+            ],
+        );
+    }
     Menu::with_items(
         app,
         &[
@@ -28,6 +40,11 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item(app, "window", "Capture Window", &s.hotkey_window)?,
             &item(app, "screen", "Capture Screen", &s.hotkey_screen)?,
             &item(app, "text", "Copy Text (OCR)", &s.hotkey_text)?,
+            &item(app, "last_area", "Capture Last Area", &s.hotkey_last_area)?,
+            &delay_menu(app)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, "record", "Record Area", &s.hotkey_record)?,
+            &item(app, "record_screen", "Record Screen", "")?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, "settings", "Settings…", "")?,
             &item(app, "update", "Check for Updates…", "")?,
@@ -36,9 +53,47 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     )
 }
 
+const DELAYS: [u32; 3] = [3, 5, 10];
+
+fn delay_menu(app: &AppHandle) -> tauri::Result<Submenu<tauri::Wry>> {
+    let menu = Submenu::new(app, "Capture After Delay", true)?;
+    for (mode, name) in [("area", "Area"), ("screen", "Screen")] {
+        if mode == "screen" {
+            menu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
+        for secs in DELAYS {
+            let text = format!("{name} in {secs} Seconds");
+            menu.append(&item(app, &format!("delay:{mode}:{secs}"), &text, "")?)?;
+        }
+    }
+    Ok(menu)
+}
+
+fn on_delay(app: &AppHandle, id: &str) {
+    let Some((mode, secs)) = id.strip_prefix("delay:").and_then(|r| r.split_once(':')) else {
+        return;
+    };
+    let mode = if mode == "screen" {
+        Mode::Screen
+    } else {
+        Mode::Area
+    };
+    if let Ok(secs) = secs.parse() {
+        crate::start_capture_after(app, mode, secs);
+    }
+}
+
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
+    // macOS: a template image, drawn white or black like the other menu bar
+    // icons. Windows: the app icon, which shows on light and dark taskbars.
+    let icon = if cfg!(target_os = "macos") {
+        tauri::include_image!("icons/tray.png")
+    } else {
+        tauri::include_image!("icons/64x64.png")
+    };
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::include_image!("icons/64x64.png"))
+        .icon(icon)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("KlikSnap")
         .menu(&menu(app)?)
         .show_menu_on_left_click(true)
@@ -47,6 +102,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "window" => crate::start_capture(app, Mode::Window),
             "screen" => crate::start_capture(app, Mode::Screen),
             "text" => crate::start_capture(app, Mode::Text),
+            "last_area" => crate::start_capture(app, Mode::LastArea),
+            "record" => crate::start_capture(app, Mode::Record),
+            "record_screen" => crate::start_capture(app, Mode::RecordScreen),
+            "stop_record" => crate::stop_recording(app),
             "settings" => {
                 let _ = crate::ui::open_settings(app);
             }
@@ -54,7 +113,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(crate::updater::check(app.clone(), true));
             }
             "quit" => app.exit(0),
-            _ => {}
+            id => on_delay(app, id),
         })
         .build(app)?;
     Ok(())

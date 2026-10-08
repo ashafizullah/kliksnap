@@ -1,6 +1,4 @@
-import { normalize, type Rect, type Scene, type Shape } from "./shapes";
-
-export const FONT = `-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif`;
+import { FONTS, badgeText, fontCss, normalize, type Rect, type Scene, type Shape } from "./shapes";
 
 let scratch: HTMLCanvasElement | null = null;
 
@@ -47,7 +45,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
   ctx.lineWidth = width;
 
   if (s.kind === "pixelate") {
-    pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(8, 7 * scale));
+    pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(2, s.size * scale));
   } else if (s.kind === "highlight") {
     const r = normalize(s.x1, s.y1, s.x2, s.y2);
     ctx.globalCompositeOperation = "multiply";
@@ -59,9 +57,21 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
     ctx.shadowOffsetY = 1 * scale;
     if (s.kind === "text") {
       const fontSize = s.size * scale;
-      ctx.font = `600 ${fontSize}px ${FONT}`;
+      ctx.font = fontCss(s.font, s.bold, fontSize);
       ctx.textBaseline = "top";
       s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fontSize * 1.25));
+    } else if (s.kind === "step") {
+      const r = s.size * scale;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.fillStyle = badgeText(s.color);
+      ctx.font = fontCss("sans", true, r * (s.n > 9 ? 1.05 : 1.25));
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Digits sit a little high when centered on their em box.
+      ctx.fillText(String(s.n), s.x, s.y + r * 0.06);
     } else if (s.kind === "arrow") {
       arrow(ctx, s.x1, s.y1, s.x2, s.y2, width);
     } else if (s.kind === "line") {
