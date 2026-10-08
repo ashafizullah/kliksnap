@@ -30,6 +30,21 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Read this version's changelog
+        id: changelog
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes=$(awk -v h="## $version" '$0 == h {on=1; next} on && /^## / {exit} on' CHANGELOG.md)
+          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$notes"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,7 +54,12 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: KlikSnap ${{ github.ref_name }}
+          # The app's update dialog shows this up to "## Download".
           releaseBody: |
+            ${{ steps.changelog.outputs.notes }}
+
+            ## Download
+
             **macOS** (Apple Silicon + Intel): download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications.
             The app is not notarized yet: the first time, right-click KlikSnap → Open, or run `xattr -cr /Applications/KlikSnap.app`.
 
