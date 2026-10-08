@@ -31,7 +31,7 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
                 std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
             }
         }
-    } else if label == "preview" || label == "toast" {
+    } else if label.starts_with("preview-") || label == "toast" {
         platform::show_inactive(&window);
     } else {
         let _ = window.show();
@@ -151,7 +151,7 @@ pub fn edit_shot(app: AppHandle, id: u32, state: State<AppState>) -> Result<(), 
         ui::open_editor(&app, id, &bounds, img.width(), img.height()).map_err(|e| e.to_string())?;
     state.retain(id);
     state.editor_shots.lock().unwrap().insert(label, id);
-    if let Some(preview) = app.get_webview_window("preview") {
+    if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
         let _ = preview.destroy();
     }
     Ok(())

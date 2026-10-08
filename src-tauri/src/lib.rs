@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::http::{header, Response};
-use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::Shortcut;
 use xcap::image::RgbaImage;
 
@@ -30,7 +30,10 @@ pub struct AppState {
     window_rects: Mutex<Option<Vec<capture::Rect>>>,
     shots: Mutex<HashMap<u32, Shot>>,
     next_shot: AtomicU32,
-    preview_shot: Mutex<Option<u32>>,
+    /// Shots with an open preview, oldest first.
+    previews: Mutex<Vec<u32>>,
+    /// Previews hidden to keep them out of the capture in progress.
+    hidden_previews: Mutex<Vec<WebviewWindow>>,
     editor_shots: Mutex<HashMap<String, u32>>,
     busy: AtomicBool,
     settings: Mutex<settings::Settings>,
@@ -54,7 +57,8 @@ impl AppState {
             window_rects: Mutex::default(),
             shots: Mutex::default(),
             next_shot: AtomicU32::new(1),
-            preview_shot: Mutex::default(),
+            previews: Mutex::default(),
+            hidden_previews: Mutex::default(),
             editor_shots: Mutex::default(),
             busy: AtomicBool::new(false),
             settings: Mutex::new(settings),
@@ -81,7 +85,7 @@ impl AppState {
         }
     }
 
-    /// Drops the shot's pixels once neither the preview nor an editor shows it.
+    /// Drops the shot's pixels once neither a preview nor an editor shows it.
     fn release(&self, id: u32) {
         let mut shots = self.shots.lock().unwrap();
         if let Some(s) = shots.get_mut(&id) {
@@ -103,11 +107,13 @@ pub fn start_capture(app: &AppHandle, mode: Mode) {
         platform::request_screen_permission();
         return;
     }
-    // Keep the previous preview out of the new screenshot.
-    let had_preview = match app.get_webview_window("preview") {
-        Some(win) => win.destroy().is_ok(),
-        None => false,
-    };
+    // Keep the open previews out of the new screenshot.
+    let hidden: Vec<WebviewWindow> = ui::previews(app)
+        .into_iter()
+        .filter(|w| w.is_visible().unwrap_or(false) && w.hide().is_ok())
+        .collect();
+    let had_preview = !hidden.is_empty();
+    *state.hidden_previews.lock().unwrap() = hidden;
     let app = app.clone();
     std::thread::spawn(move || {
         if had_preview {
@@ -116,6 +122,7 @@ pub fn start_capture(app: &AppHandle, mode: Mode) {
         if let Err(e) = run_capture(&app, mode) {
             eprintln!("capture failed: {e}");
             app.state::<AppState>().busy.store(false, Ordering::SeqCst);
+            reveal_previews(&app);
         }
     });
 }
@@ -149,6 +156,7 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
     }
     platform::restore_frontmost();
     state.busy.store(false, Ordering::SeqCst);
+    reveal_previews(app);
     let Some((index, rect)) = selection else {
         return;
     };
@@ -206,7 +214,16 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
     ui::show_toast(app, bounds).map_err(|e| e.to_string())
 }
 
+/// Shows the previews hidden by `start_capture` again.
+fn reveal_previews(app: &AppHandle) {
+    let hidden = std::mem::take(&mut *app.state::<AppState>().hidden_previews.lock().unwrap());
+    for win in hidden {
+        platform::show_inactive(&win);
+    }
+}
+
 fn finish_shot(app: &AppHandle, img: RgbaImage, bounds: Bounds) -> Result<(), String> {
+    reveal_previews(app);
     let state = app.state::<AppState>();
     let s = state.settings();
     let img = Arc::new(img);
@@ -219,10 +236,25 @@ fn finish_shot(app: &AppHandle, img: RgbaImage, bounds: Bounds) -> Result<(), St
             refs: 1,
         },
     );
-    if let Some(old) = state.preview_shot.lock().unwrap().replace(id) {
-        state.release(old);
-    }
+    let previews = {
+        let mut previews = state.previews.lock().unwrap();
+        previews.push(id);
+        previews.clone()
+    };
     ui::show_preview(app, id, &bounds, s.preview_secs).map_err(|e| e.to_string())?;
+    // Drop the oldest previews that no longer fit; closing them restacks the rest.
+    let fit = ui::previews_that_fit(app, &bounds);
+    if previews.len() > fit {
+        for old in &previews[..previews.len() - fit] {
+            if let Some(win) = app.get_webview_window(&ui::preview_label(*old)) {
+                let _ = win.destroy();
+            }
+        }
+    }
+    // Not under the lock: placing a window waits on the main thread, which
+    // takes the lock in `on_window_destroyed`.
+    let previews = state.previews.lock().unwrap().clone();
+    ui::stack_previews(app, &previews, &bounds);
     if s.auto_copy {
         output::copy(&img)?;
     }
@@ -251,9 +283,24 @@ fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
 
 fn on_window_destroyed(app: &AppHandle, label: &str) {
     let state = app.state::<AppState>();
-    if label == "preview" {
-        if let Some(id) = state.preview_shot.lock().unwrap().take() {
-            state.release(id);
+    if let Some(id) = label
+        .strip_prefix("preview-")
+        .and_then(|id| id.parse().ok())
+    {
+        let previews = {
+            let mut previews = state.previews.lock().unwrap();
+            previews.retain(|&p| p != id);
+            previews.clone()
+        };
+        state
+            .hidden_previews
+            .lock()
+            .unwrap()
+            .retain(|w| w.label() != label);
+        state.release(id);
+        // Close the gap, on the monitor of the newest preview.
+        if let Some((_, bounds)) = previews.last().and_then(|&newest| state.shot(newest)) {
+            ui::stack_previews(app, &previews, &bounds);
         }
     } else if label.starts_with("editor-") {
         if let Some(id) = state.editor_shots.lock().unwrap().remove(label) {

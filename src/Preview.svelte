@@ -5,7 +5,7 @@
 
   const secs = Number(param("t") ?? 6);
 
-  let id = $state(Number(param("id")));
+  const id = Number(param("id"));
   let status = $state("");
   let hovering = $state(false);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -42,17 +42,11 @@
   }
 
   onMount(() => {
-    const unlisten = listen<number>("preview:shot", (e) => {
-      id = e.payload;
-      status = "";
-      schedule();
-    });
     // Sent by Rust: the webview gets no mouse-move events while unfocused.
     const unlistenHover = listen<boolean>("preview:hover", (e) => setHover(e.payload));
     schedule();
     return () => {
       clearTimeout(timer);
-      unlisten.then((f) => f());
       unlistenHover.then((f) => f());
     };
   });
