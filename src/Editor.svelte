@@ -25,13 +25,15 @@
     { id: "line", label: "Line", key: "l", d: "M4 14L14 4" },
     { id: "rect", label: "Rectangle", key: "r", d: "M3 4h12v10H3z" },
     { id: "ellipse", label: "Ellipse", key: "o", d: "M3 9a6 5 0 1 0 12 0a6 5 0 1 0-12 0" },
+    { id: "pen", label: "Pen", key: "d", d: "M3 14c2-1 3-5 5-5s1 4 3 4 2-6 4-8" },
     { id: "text", label: "Text", key: "t", d: "M4 4h10M9 4v11" },
     { id: "step", label: "Number", key: "n", d: "M3 9a6 6 0 1 0 12 0a6 6 0 1 0-12 0M8 7l1.5-1v6" },
     { id: "highlight", label: "Highlight", key: "h", d: "M3 15h12M6 12l5-8 3 2-5 8H6z" },
+    { id: "blur", label: "Blur", key: "b", d: "M9 2.5c3 3.5 5 6 5 8.5a5 5 0 01-10 0c0-2.5 2-5 5-8.5z" },
     { id: "pixelate", label: "Pixelate", key: "p", d: "M3 3h4v4H3zM11 3h4v4h-4zM7 7h4v4H7zM3 11h4v4H3zM11 11h4v4h-4z" },
     { id: "crop", label: "Crop", key: "c", d: "M5 2v11h11M2 5h11v11" },
   ];
-  const DRAG_TOOLS = new Set<Tool>(["arrow", "line", "rect", "ellipse", "highlight", "pixelate"]);
+  const DRAG_TOOLS = new Set<Tool>(["arrow", "line", "rect", "ellipse", "highlight", "blur", "pixelate"]);
   const mod = isMac ? "⌘" : "Ctrl+";
 
   let base = $state.raw<HTMLImageElement | null>(null);
@@ -172,11 +174,20 @@
     }
     canvas.setPointerCapture(e.pointerId);
     dragFrom = p;
+    if (tool === "pen") draft = { kind: "pen", points: [p.x, p.y], color, size: sizes.pen };
   }
 
   function onPointerMove(e: PointerEvent) {
     if (!dragFrom) return;
     const p = toImage(e);
+    if (draft?.kind === "pen") {
+      const pts = draft.points;
+      const minGap = 1.5 * scale;
+      if (Math.hypot(p.x - pts[pts.length - 2], p.y - pts[pts.length - 1]) >= minGap) {
+        draft = { ...draft, points: [...pts, p.x, p.y] };
+      }
+      return;
+    }
     const [x2, y2] = e.shiftKey ? constrain(tool, dragFrom.x, dragFrom.y, p.x, p.y) : [p.x, p.y];
     if (tool === "crop") {
       cropDraft = normalize(dragFrom.x, dragFrom.y, x2, y2);
@@ -197,6 +208,9 @@
     if (cropDraft && cropDraft.w > 4 && cropDraft.h > 4) {
       commit({ ...scene, crop: cropDraft });
     } else if (draft && "x2" in draft && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) > 3) {
+      commit({ ...scene, shapes: [...scene.shapes, draft] });
+    } else if (draft?.kind === "pen") {
+      // A click without moving leaves a dot.
       commit({ ...scene, shapes: [...scene.shapes, draft] });
     }
     dragFrom = null;

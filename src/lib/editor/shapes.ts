@@ -1,7 +1,18 @@
-export type Tool = "arrow" | "line" | "rect" | "ellipse" | "text" | "step" | "highlight" | "pixelate" | "crop";
+export type Tool =
+  | "arrow"
+  | "line"
+  | "rect"
+  | "ellipse"
+  | "pen"
+  | "text"
+  | "step"
+  | "highlight"
+  | "blur"
+  | "pixelate"
+  | "crop";
 
 export type DragShape = {
-  kind: Exclude<Tool, "text" | "step" | "crop">;
+  kind: Exclude<Tool, "pen" | "text" | "step" | "crop">;
   x1: number;
   y1: number;
   x2: number;
@@ -24,7 +35,10 @@ export type TextShape = {
 /** A numbered badge; `n` is fixed when placed, counting the badges before it. */
 export type StepShape = { kind: "step"; x: number; y: number; n: number; color: string; size: number };
 
-export type Shape = DragShape | TextShape | StepShape;
+/** A freehand stroke; `points` holds x, y pairs. */
+export type PenShape = { kind: "pen"; points: number[]; color: string; size: number };
+
+export type Shape = DragShape | PenShape | TextShape | StepShape;
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
@@ -42,8 +56,10 @@ export const SIZES: Partial<Record<Tool, SizeSpec>> = {
   line: STROKE,
   rect: STROKE,
   ellipse: STROKE,
+  pen: STROKE,
   text: { label: "Font size", min: 10, max: 96, presets: [16, 24, 36] },
   step: { label: "Size", min: 8, max: 40, presets: [10, 14, 20] },
+  blur: { label: "Strength", min: 2, max: 30, presets: [6, 12, 20] },
   pixelate: { label: "Block size", min: 3, max: 30, presets: [5, 8, 14] },
 };
 

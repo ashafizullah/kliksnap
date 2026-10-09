@@ -16,6 +16,31 @@ function pixelate(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rec
   ctx.imageSmoothingEnabled = true;
 }
 
+function blur(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rect, radius: number) {
+  if (r.w < 1 || r.h < 1) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.clip();
+  ctx.filter = `blur(${radius}px)`;
+  // Sample a margin around the region too, so its edges don't fade to transparent.
+  const m = radius * 2;
+  ctx.drawImage(base, r.x - m, r.y - m, r.w + 2 * m, r.h + 2 * m, r.x - m, r.y - m, r.w + 2 * m, r.h + 2 * m);
+  ctx.restore();
+}
+
+/** Smooths the stroke by curving through the midpoints between samples. */
+function pen(ctx: CanvasRenderingContext2D, pts: number[]) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0], pts[1]);
+  if (pts.length === 2) ctx.lineTo(pts[0] + 0.01, pts[1]);
+  for (let i = 2; i < pts.length - 2; i += 2) {
+    ctx.quadraticCurveTo(pts[i], pts[i + 1], (pts[i] + pts[i + 2]) / 2, (pts[i + 1] + pts[i + 3]) / 2);
+  }
+  if (pts.length > 2) ctx.lineTo(pts[pts.length - 2], pts[pts.length - 1]);
+  ctx.stroke();
+}
+
 function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number) {
   const angle = Math.atan2(y2 - y1, x2 - x1);
   const head = Math.min(Math.max(width * 3.5, 12), Math.hypot(x2 - x1, y2 - y1));
@@ -46,6 +71,8 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
 
   if (s.kind === "pixelate") {
     pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(2, s.size * scale));
+  } else if (s.kind === "blur") {
+    blur(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(1, s.size * scale));
   } else if (s.kind === "highlight") {
     const r = normalize(s.x1, s.y1, s.x2, s.y2);
     ctx.globalCompositeOperation = "multiply";
@@ -72,6 +99,8 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
       ctx.textBaseline = "middle";
       // Digits sit a little high when centered on their em box.
       ctx.fillText(String(s.n), s.x, s.y + r * 0.06);
+    } else if (s.kind === "pen") {
+      pen(ctx, s.points);
     } else if (s.kind === "arrow") {
       arrow(ctx, s.x1, s.y1, s.x2, s.y2, width);
     } else if (s.kind === "line") {
