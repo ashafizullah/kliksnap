@@ -13,6 +13,8 @@
   let mode = $state<Mode>("area");
   // Selecting what to record rather than what to capture.
   let recording = $state(false);
+  // Selecting what to scroll and stitch.
+  let scrolling = $state(false);
   let imageWidth = $state(0);
   let windows = $state<number[][] | null>(null);
   let mouse = $state({ x: -1, y: -1 });
@@ -114,7 +116,7 @@
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") finish(null);
-    else if (e.key.toLowerCase() === "c" && mode === "area" && !recording && hex && !dragStart && !done) {
+    else if (e.key.toLowerCase() === "c" && mode === "area" && !recording && !scrolling && hex && !dragStart && !done) {
       done = true;
       invoke("overlay_pick_color", { index, hex });
     }
@@ -195,12 +197,13 @@
   });
 
   async function init() {
-    const info = await invoke<{ mode: Mode | "screen" | "record" | "record_gif"; width: number } | null>("overlay_info", { index });
+    const info = await invoke<{ mode: Mode | "screen" | "record" | "record_gif" | "scroll"; width: number } | null>("overlay_info", { index });
     if (!info) return finish(null);
     imageWidth = info.width;
     live = info.width === 0;
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
     recording = info.mode === "record" || info.mode === "record_gif";
+    scrolling = info.mode === "scroll";
     if (live) {
       ready();
       liveLoupe();
@@ -264,9 +267,10 @@
       Drag over text to copy it
     {:else}
       {#if recording}<strong>Record</strong> ·{/if}
+      {#if scrolling}<strong>Scrolling capture</strong> · Select the part that scrolls ·{/if}
       {mode === "area" ? "Drag to select" : "Click a window"} · <kbd>Space</kbd>
       {mode === "area" ? "window mode" : "area mode"}
-      {#if mode === "area" && !recording}· <kbd>C</kbd> copy color{/if}
+      {#if mode === "area" && !recording && !scrolling}· <kbd>C</kbd> copy color{/if}
     {/if}
     {#if live}· Scroll works{/if}
     · <kbd>Esc</kbd> cancel

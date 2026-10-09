@@ -9,6 +9,7 @@ mod platform;
 mod record;
 mod redact;
 mod settings;
+mod stitch;
 mod tray;
 mod ui;
 mod updater;
@@ -51,9 +52,21 @@ pub struct AppState {
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
     toast: Mutex<Toast>,
     recording: Mutex<Option<Recording>>,
+    /// The scrolling capture in progress.
+    scroll: Mutex<Option<ScrollSession>>,
     /// Pins that let clicks through to the windows below, by window label.
     click_through: Mutex<std::collections::HashSet<String>>,
 }
+
+struct ScrollSession {
+    /// 0 while capturing, then DONE or CANCEL.
+    stop: Arc<std::sync::atomic::AtomicU8>,
+    /// The controls' window number (macOS), so captures leave them out.
+    controls: Arc<AtomicU32>,
+}
+
+const SCROLL_DONE: u8 = 1;
+const SCROLL_CANCEL: u8 = 2;
 
 struct Recording {
     recorder: record::Recorder,
@@ -91,6 +104,7 @@ impl AppState {
             toast: Mutex::default(),
             recording: Mutex::default(),
             click_through: Mutex::default(),
+            scroll: Mutex::default(),
         }
     }
 
@@ -234,6 +248,22 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         return;
     };
     let mode = *state.mode.lock().unwrap();
+    if mode == Mode::Scroll {
+        state.busy.store(false, Ordering::SeqCst);
+        reveal_previews(app);
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            if let Err(e) = scroll_capture(&app, f.bounds, rect) {
+                let toast = Toast {
+                    title: format!("Scrolling capture failed: {e}"),
+                    ..Default::default()
+                };
+                let _ = show_toast(&app, toast, &f.bounds);
+            }
+        });
+        return;
+    }
     if matches!(mode, Mode::Record | Mode::RecordGif) {
         state.busy.store(false, Ordering::SeqCst);
         reveal_previews(app);
@@ -395,6 +425,74 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
             };
             let _ = show_toast(app, toast, &bounds);
         }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ScrollProgress {
+    height: usize,
+    /// The last frame didn't line up: scrolled too fast or upwards.
+    lost: bool,
+    full: bool,
+}
+
+/// Captures `rect` (fractions of the monitor at `bounds`) again and again
+/// while the user scrolls it, stitching the frames, until Done or Cancel in
+/// the controls. Blocking: call off the main thread.
+fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let session = ScrollSession {
+        stop: Arc::default(),
+        controls: Arc::default(),
+    };
+    let (stop, controls) = (session.stop.clone(), session.controls.clone());
+    *state.scroll.lock().unwrap() = Some(session);
+    let result = (|| -> Result<stitch::Stitcher, String> {
+        ui::show_scroll(app, &bounds, rect).map_err(|e| e.to_string())?;
+        // macOS captures what is below the controls, so it needs their window number.
+        let wait = std::time::Instant::now();
+        while cfg!(target_os = "macos")
+            && controls.load(Ordering::SeqCst) == 0
+            && wait.elapsed() < Duration::from_secs(3)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let grab = || capture::under_overlay(&bounds, controls.load(Ordering::SeqCst), rect);
+        let first = grab().ok_or("couldn't capture the area")?;
+        let mut stitcher = stitch::Stitcher::new(&first);
+        let mut last = None;
+        while stop.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(80));
+            let Some(frame) = grab() else { continue };
+            let step = stitcher.push(&frame);
+            let progress = ScrollProgress {
+                height: stitcher.height(),
+                lost: step == stitch::Step::Lost,
+                full: step == stitch::Step::Full,
+            };
+            if last.as_ref() != Some(&(progress.height, progress.lost, progress.full)) {
+                last = Some((progress.height, progress.lost, progress.full));
+                let _ = app.emit_to("scroll", "scroll:progress", progress);
+            }
+        }
+        Ok(stitcher)
+    })();
+    *state.scroll.lock().unwrap() = None;
+    if let Some(win) = app.get_webview_window("scroll") {
+        let _ = win.destroy();
+    }
+    let stitcher = result?;
+    if stop.load(Ordering::SeqCst) == SCROLL_DONE {
+        finish_shot(app, stitcher.finish(), bounds, None)?;
+    }
+    Ok(())
+}
+
+/// The Done and Cancel buttons of a scrolling capture.
+pub fn end_scroll(app: &AppHandle, done: bool) {
+    if let Some(s) = app.state::<AppState>().scroll.lock().unwrap().as_ref() {
+        let code = if done { SCROLL_DONE } else { SCROLL_CANCEL };
+        s.stop.store(code, Ordering::SeqCst);
     }
 }
 
@@ -717,6 +815,7 @@ pub fn run() {
             commands::file_name_example,
             commands::find_sensitive,
             commands::history_list,
+            commands::end_scroll,
             commands::open_history,
             commands::history_action,
             commands::history_clear,

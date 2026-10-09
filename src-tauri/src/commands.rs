@@ -43,6 +43,13 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
                 std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
             }
         }
+    } else if label == "scroll" {
+        // Keep the controls out of the frames being stitched.
+        let id = platform::prepare_live_overlay(&window);
+        if let Some(s) = state.scroll.lock().unwrap().as_ref() {
+            s.controls.store(id, Ordering::SeqCst);
+        }
+        platform::show_inactive(&window);
     } else if label == "recording" {
         // Keep the controls out of the recording (Windows; macOS leaves all
         // of KlikSnap's windows out).
@@ -112,6 +119,11 @@ pub fn app_version(app: AppHandle) -> String {
 #[tauri::command]
 pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn end_scroll(app: AppHandle, done: bool) {
+    crate::end_scroll(&app, done);
 }
 
 #[tauri::command]

@@ -17,6 +17,8 @@ pub struct Settings {
     pub hotkey_last_area: String,
     /// Starts recording an area, and stops the recording. Off by default.
     pub hotkey_record: String,
+    /// Starts a scrolling capture. Off by default.
+    pub hotkey_scroll: String,
     /// Windows: Print Screen also captures an area, instead of opening the
     /// Snipping Tool.
     pub print_screen: bool,
@@ -60,6 +62,7 @@ impl Default for Settings {
             hotkey_text: "Alt+Shift+2".into(),
             hotkey_last_area: String::new(),
             hotkey_record: String::new(),
+            hotkey_scroll: String::new(),
             print_screen: false,
             save_dir: String::new(),
             auto_copy: true,

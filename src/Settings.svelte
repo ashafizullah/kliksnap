@@ -9,6 +9,7 @@
     hotkey_text: string;
     hotkey_last_area: string;
     hotkey_record: string;
+    hotkey_scroll: string;
     print_screen: boolean;
     save_dir: string;
     auto_copy: boolean;
@@ -26,7 +27,7 @@
     check_updates: boolean;
     show_tray: boolean;
   };
-  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record";
+  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
     { field: "hotkey_area", label: "Capture area" },
@@ -35,6 +36,7 @@
     { field: "hotkey_text", label: "Copy text (OCR)" },
     { field: "hotkey_last_area", label: "Capture last area" },
     { field: "hotkey_record", label: "Record area (again to stop)" },
+    { field: "hotkey_scroll", label: "Scrolling capture" },
   ];
 
   type Tab = "general" | "capture" | "recording" | "shortcuts";

@@ -19,6 +19,7 @@ export default defineConfig({
         pin: "pin.html",
         countdown: "countdown.html",
         recording: "recording.html",
+        scroll: "scroll.html",
       },
     },
   },

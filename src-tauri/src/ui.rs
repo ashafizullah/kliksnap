@@ -317,6 +317,44 @@ pub fn show_countdown(
     Ok(win)
 }
 
+const SCROLL_W: f64 = 340.0;
+const SCROLL_H: f64 = 48.0;
+
+/// Shows the scrolling capture's controls next to `rect` (fractions of the
+/// monitor at `b`): under it if there's room, else above it, else inside.
+pub fn show_scroll(app: &AppHandle, b: &Bounds, rect: [f64; 4]) -> tauri::Result<()> {
+    if let Some(old) = app.get_webview_window("scroll") {
+        old.destroy()?;
+    }
+    let area = work_area(app, b);
+    let [fx, fy, fw, fh] = rect;
+    let (rx, ry) = (b.x as f64 + fx * b.w as f64, b.y as f64 + fy * b.h as f64);
+    let (rw, rh) = (fw * b.w as f64, fh * b.h as f64);
+    let (w, h, gap) = (area.n(SCROLL_W), area.n(SCROLL_H), area.n(8.0));
+    let x = (rx + (rw - w) / 2.0).clamp(area.x + gap, area.x + area.w - w - gap);
+    let y = if ry + rh + gap + h <= area.y + area.h {
+        ry + rh + gap
+    } else if ry - gap - h >= area.y {
+        ry - gap - h
+    } else {
+        ry + rh - h - gap
+    };
+    let win = WebviewWindowBuilder::new(app, "scroll", WebviewUrl::App("scroll.html".into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible_on_all_workspaces(true)
+        .inner_size(SCROLL_W, SCROLL_H)
+        .visible(false)
+        .build()?;
+    place(&win, &area, x, y, SCROLL_W, SCROLL_H);
+    Ok(())
+}
+
 const RECORDING_W: f64 = 168.0;
 const RECORDING_H: f64 = 44.0;
 
