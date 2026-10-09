@@ -3,6 +3,18 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.0
+
+### New
+
+- Scrolling capture: select an area, scroll it, and get one tall image. Sticky headers and footers appear once. Tray → *Scrolling Capture*, or set a shortcut
+- Record GIF: tray → *Record GIF* records an area straight to an animated GIF
+- Sound in recordings: the computer's audio and the microphone (Settings → Recording). macOS needs 13 or later for computer sound and 15 for the microphone
+- History: your recent captures in one window, searchable by the text in them, to copy, edit, pin or save again. Tray → *History…*; set how many to keep in Settings → Capture
+- Auto-redact in the editor: one click pixelates email addresses, phone and card numbers, IP addresses, API keys and passwords found by OCR
+- Pins: fade them (right-click → Opacity, or `⌥`/`Alt` + scroll), let clicks pass through to the windows below, and pin the image on the clipboard from the tray
+- Bahasa Indonesia: menus, notices and every window, following the system language or Settings → General → Language
+
 ## 0.8.0
 
 ### New

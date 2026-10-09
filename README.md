@@ -29,15 +29,20 @@
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
 - **Floating preview** after each capture: copy, save, pin, or open the editor
 - **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
-- **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder; no audio yet
-- **Pin to screen**: keep a screenshot floating above your windows as a reference
+- **Scrolling capture**: select an area, scroll it, and get one tall stitched image (sticky headers kept once)
+- **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder, with the computer's sound and the microphone if you want them
+- **Record GIF**: an area straight to an animated GIF
+- **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
 - **Annotate**: arrow, line, rectangle, ellipse, pen, text, numbered steps, highlighter, blur, pixelate, crop, undo/redo
+- **Auto-redact**: one click hides email addresses, phone and card numbers, IP addresses, API keys and passwords that OCR finds
 - **Background**: place a screenshot on a gradient or solid backdrop with padding, rounded corners and a shadow
 - **Color picker**: press `C` while selecting to copy the color under the crosshair as hex
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr). If the selection holds a QR code, its content is copied instead
 - Copies to the clipboard automatically; optional auto-save to a folder as PNG or JPG, with a file name template
+- **History**: recent captures, searchable by the text in them, to copy, edit, pin or save again
 - **Capture resolution**: Max, Medium (75%) or Low (50%) for smaller files
+- **English and Bahasa Indonesia**, following the system language or your choice in Settings
 - **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
 The macOS app is about 4 MB per architecture (a 5 MB universal DMG) and uses about 15 MB of memory while idle.
@@ -65,6 +70,7 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Copy text (OCR) | `⌥⇧2` / `Alt+Shift+2` |
 | Capture last area | not set (Settings → Shortcuts) |
 | Record area / stop recording | not set (Settings → Shortcuts) |
+| Scrolling capture | not set (Settings → Shortcuts) |
 
 On Windows you can also hide the tray icon in Settings; KlikSnap keeps running on its shortcuts, and opening it again from the Start menu brings up Settings.
 
@@ -72,7 +78,9 @@ On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` 
 
 In area mode, press `Space` to switch to window mode, `C` to copy the color under the crosshair and `Esc` to cancel. In the editor, use `A L R O D T N H B P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
 
-A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%). Right-click it for Copy, Save and Annotate; double-click or press `Esc` to close it.
+A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%); hold `⌥` / `Alt` while scrolling to fade it. Right-click it for Copy, Save, Annotate, Opacity and Click Through; double-click or press `Esc` to close it. A click-through pin ignores the mouse until you choose *Make Pins Clickable Again* in the menu bar / tray menu.
+
+For a scrolling capture, pick *Scrolling Capture* in the menu, select the part of the window that scrolls, then scroll down slowly and press *Done*.
 
 ## Development
 
