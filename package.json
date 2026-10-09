@@ -1,6 +1,6 @@
 {
   "name": "kliksnap",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Free, open-source, lightweight screenshot tool for macOS and Windows",
   "private": true,
   "type": "module",

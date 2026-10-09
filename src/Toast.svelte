@@ -11,7 +11,8 @@
     toast = await invoke<{ title: string; text: string; path: string }>("toast_text");
     await tick();
     ready();
-    setTimeout(closeWindow, toast.path ? 6000 : toast.text ? 3500 : 2500);
+    // Long enough to read: longer text stays longer.
+    setTimeout(closeWindow, toast.path ? 6000 : toast.text ? Math.max(3500, toast.text.length * 70) : 2500);
   });
 
   async function onClick() {
