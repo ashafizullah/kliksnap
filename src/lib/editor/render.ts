@@ -1,4 +1,4 @@
-import { FONTS, badgeText, fontCss, normalize, type Rect, type Scene, type Shape } from "./shapes";
+import { FILLS, badgeText, fontCss, normalize, type Backdrop, type Rect, type Scene, type Shape } from "./shapes";
 
 let scratch: HTMLCanvasElement | null = null;
 
@@ -151,7 +151,40 @@ export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: n
   ctx.restore();
 }
 
-/** Renders the final image (annotations applied, crop honored) as RGBA bytes. */
+/** Draws `image` centered on the backdrop, which fills the whole canvas. */
+function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w: number, h: number, b: Backdrop, scale: number) {
+  const pad = Math.round(b.padding * scale);
+  const radius = b.radius * scale;
+  const { width, height } = ctx.canvas;
+  const stops = FILLS[b.fill].stops;
+  if (stops.length === 1) {
+    ctx.fillStyle = stops[0];
+    ctx.fillRect(0, 0, width, height);
+  } else if (stops.length > 1) {
+    // 135deg, like the CSS preview: top left to bottom right.
+    const g = ctx.createLinearGradient(0, 0, width, height);
+    stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(pad, pad, w, h, radius);
+  if (b.shadow) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+    ctx.shadowBlur = Math.max(8, pad * 0.5);
+    ctx.shadowOffsetY = Math.max(2, pad * 0.12);
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.clip();
+  ctx.drawImage(image, pad, pad);
+  ctx.restore();
+}
+
+/** Renders the final image (annotations applied, crop and backdrop honored) as RGBA bytes. */
 export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number) {
   const full = { x: 0, y: 0, w: base.naturalWidth, h: base.naturalHeight };
   const c = scene.crop ?? full;
@@ -167,6 +200,16 @@ export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.translate(-r.x, -r.y);
   drawScene(ctx, base, scene, scale);
-  const data = ctx.getImageData(0, 0, r.w, r.h).data;
-  return { bytes: new Uint8Array(data.buffer), width: r.w, height: r.h };
+  if (!scene.backdrop) {
+    const data = ctx.getImageData(0, 0, r.w, r.h).data;
+    return { bytes: new Uint8Array(data.buffer), width: r.w, height: r.h };
+  }
+  const pad = Math.round(scene.backdrop.padding * scale);
+  const out = document.createElement("canvas");
+  out.width = r.w + 2 * pad;
+  out.height = r.h + 2 * pad;
+  const octx = out.getContext("2d", { willReadFrequently: true })!;
+  drawBackdrop(octx, canvas, r.w, r.h, scene.backdrop, scale);
+  const data = octx.getImageData(0, 0, out.width, out.height).data;
+  return { bytes: new Uint8Array(data.buffer), width: out.width, height: out.height };
 }

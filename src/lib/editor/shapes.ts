@@ -42,7 +42,56 @@ export type Shape = DragShape | PenShape | TextShape | StepShape;
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
-export type Scene = { shapes: Shape[]; crop: Rect | null };
+/** Padding, corners and shadow around the exported image; sizes in logical px. */
+export type Backdrop = { fill: FillId; padding: number; radius: number; shadow: boolean };
+
+export type Scene = { shapes: Shape[]; crop: Rect | null; backdrop: Backdrop | null };
+
+/** Backdrop fills: one stop is a solid color, two or more a diagonal gradient, none transparent. */
+export const FILLS = {
+  ocean: { label: "Ocean", stops: ["#4facfe", "#00c6fb", "#005bea"] },
+  sunset: { label: "Sunset", stops: ["#f6d365", "#fda085", "#f5576c"] },
+  violet: { label: "Violet", stops: ["#a18cd1", "#fbc2eb"] },
+  mint: { label: "Mint", stops: ["#43e97b", "#38f9d7"] },
+  dusk: { label: "Dusk", stops: ["#30cfd0", "#330867"] },
+  graphite: { label: "Graphite", stops: ["#5f6b7a", "#1e232b"] },
+  white: { label: "White", stops: ["#ffffff"] },
+  black: { label: "Black", stops: ["#111111"] },
+  clear: { label: "Transparent", stops: [] as string[] },
+};
+
+export type FillId = keyof typeof FILLS;
+
+export const PADDINGS = [
+  { label: "S", value: 24 },
+  { label: "M", value: 48 },
+  { label: "L", value: 80 },
+];
+
+export const RADII = [
+  { label: "None", value: 0 },
+  { label: "S", value: 8 },
+  { label: "L", value: 16 },
+];
+
+export const DEFAULT_BACKDROP: Backdrop = { fill: "ocean", padding: 48, radius: 8, shadow: true };
+
+/** A saved backdrop if it is well formed, else null. */
+export function parseBackdrop(v: unknown): Backdrop | null {
+  if (!v || typeof v !== "object") return null;
+  const b = v as Record<string, unknown>;
+  if (typeof b.fill !== "string" || !(b.fill in FILLS)) return null;
+  const padding = PADDINGS.find((p) => p.value === b.padding)?.value ?? DEFAULT_BACKDROP.padding;
+  const radius = RADII.find((r) => r.value === b.radius)?.value ?? DEFAULT_BACKDROP.radius;
+  return { fill: b.fill as FillId, padding, radius, shadow: b.shadow !== false };
+}
+
+export function fillCss(fill: FillId) {
+  const stops = FILLS[fill].stops;
+  if (!stops.length) return "transparent";
+  if (stops.length === 1) return stops[0];
+  return `linear-gradient(135deg, ${stops.join(", ")})`;
+}
 
 export const COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#007aff", "#000000", "#ffffff"];
 

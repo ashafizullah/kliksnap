@@ -3,13 +3,21 @@
   import { closeWindow, imageUrl, invoke, isMac, loadImage, param, ready } from "./lib/api";
   import {
     COLORS,
+    DEFAULT_BACKDROP,
+    FILLS,
     FONTS,
+    PADDINGS,
+    RADII,
     SIZES,
     constrain,
+    fillCss,
     fontCss,
     nextStep,
     normalize,
+    parseBackdrop,
+    type Backdrop,
     type DragShape,
+    type FillId,
     type FontId,
     type Rect,
     type Scene,
@@ -66,8 +74,12 @@
   let bold = $state<boolean>(prefs.bold ?? true);
   const sizeSpec = $derived(SIZES[tool]);
 
+  // The backdrop carries over too, on or off.
+  let lastBackdrop = $state<Backdrop>(parseBackdrop(prefs.lastBackdrop) ?? DEFAULT_BACKDROP);
+  let backdropPanel = $state(false);
+
   $effect(() => {
-    const json = JSON.stringify({ sizes, font, bold });
+    const json = JSON.stringify({ sizes, font, bold, backdrop: scene.backdrop, lastBackdrop });
     try {
       localStorage.setItem(PREFS, json);
     } catch {
@@ -82,7 +94,7 @@
     sizes[tool] = Math.min(spec.max, Math.max(spec.min, sizes[tool] + dir * step));
   }
 
-  let scene: Scene = $state.raw({ shapes: [], crop: null });
+  let scene: Scene = $state.raw({ shapes: [], crop: null, backdrop: parseBackdrop(prefs.backdrop) });
   let past: Scene[] = $state.raw([]);
   let future: Scene[] = $state.raw([]);
   let draft = $state.raw<Shape | null>(null);
@@ -115,7 +127,13 @@
 
   function clearAll() {
     text = null;
-    if (scene.shapes.length || scene.crop) commit({ shapes: [], crop: null });
+    if (scene.shapes.length || scene.crop) commit({ ...scene, shapes: [], crop: null });
+  }
+
+  function setBackdrop(change: Partial<Backdrop> | null) {
+    const next = change && { ...lastBackdrop, ...scene.backdrop, ...change };
+    if (next) lastBackdrop = next;
+    commit({ ...scene, backdrop: next });
   }
 
   function redo() {
@@ -138,10 +156,30 @@
     redraw();
   });
 
+  $effect(() => {
+    void scene.backdrop?.padding;
+    fit();
+  });
+
+  // Backdrop preview in CSS pixels; the canvas itself keeps its coordinates.
+  const preview = $derived.by(() => {
+    const b = scene.backdrop;
+    if (!b || !base) return null;
+    const k = (view.w / base.naturalWidth) * scale;
+    const pad = b.padding * k;
+    return {
+      pad,
+      fill: fillCss(b.fill),
+      radius: b.radius * k,
+      shadow: b.shadow ? `0 ${Math.max(2, pad * 0.12)}px ${Math.max(8, pad * 0.5)}px rgba(0, 0, 0, 0.35)` : "none",
+    };
+  });
+
   function fit() {
     if (!base) return;
     const natural = { w: base.naturalWidth / scale, h: base.naturalHeight / scale };
-    const k = Math.min(1, (stage.clientWidth - 32) / natural.w, (stage.clientHeight - 32) / natural.h);
+    const pad = 2 * (scene.backdrop?.padding ?? 0);
+    const k = Math.min(1, (stage.clientWidth - 32) / (natural.w + pad), (stage.clientHeight - 32) / (natural.h + pad));
     view = { w: Math.round(natural.w * k), h: Math.round(natural.h * k) };
   }
 
@@ -159,6 +197,7 @@
     if (e.button !== 0 || !base) return;
     // Keep the browser from moving focus to <body>, which would blur the text box.
     e.preventDefault();
+    backdropPanel = false;
     if (text) commitText();
     const p = toImage(e);
     if (tool === "step") {
@@ -289,6 +328,10 @@
       }
       return;
     }
+    if (e.key === "Escape" && backdropPanel) {
+      backdropPanel = false;
+      return;
+    }
     if (e.key === "Escape" && dragFrom) {
       dragFrom = null;
       draft = null;
@@ -391,6 +434,65 @@
       </label>
     </div>
 
+    <div class="group backdrop-group">
+      <button
+        class="icon"
+        class:active={!!scene.backdrop}
+        title="Background"
+        aria-label="Background"
+        aria-expanded={backdropPanel}
+        onclick={() => (backdropPanel = !backdropPanel)}
+      >
+        <svg viewBox="0 0 18 18"><path d="M2.5 2.5h13v13h-13zM6 6h6v6H6z" /></svg>
+      </button>
+      {#if backdropPanel}
+        <div class="panel" role="dialog" aria-label="Background">
+          <div class="row fills">
+            <button class="fill off" class:active={!scene.backdrop} title="No background" onclick={() => setBackdrop(null)}>Off</button>
+            {#each Object.entries(FILLS) as [fid, f] (fid)}
+              <button
+                class="fill"
+                class:active={scene.backdrop?.fill === fid}
+                class:clear={fid === "clear"}
+                style="--fill:{fillCss(fid as FillId)}"
+                title={f.label}
+                aria-label="{f.label} background"
+                onclick={() => setBackdrop({ fill: fid as FillId })}
+              ></button>
+            {/each}
+          </div>
+          <div class="row">
+            <span class="muted">Padding</span>
+            {#each PADDINGS as p (p.value)}
+              <button
+                class="chip"
+                class:active={(scene.backdrop ?? lastBackdrop).padding === p.value}
+                onclick={() => setBackdrop({ padding: p.value })}>{p.label}</button
+              >
+            {/each}
+          </div>
+          <div class="row">
+            <span class="muted">Corners</span>
+            {#each RADII as r (r.value)}
+              <button
+                class="chip"
+                class:active={(scene.backdrop ?? lastBackdrop).radius === r.value}
+                onclick={() => setBackdrop({ radius: r.value })}>{r.label}</button
+              >
+            {/each}
+          </div>
+          <label class="row">
+            <input
+              type="checkbox"
+              checked={(scene.backdrop ?? lastBackdrop).shadow}
+              onchange={(e) => setBackdrop({ shadow: e.currentTarget.checked })}
+            />
+            <span>Shadow</span>
+          </label>
+        </div>
+      {/if}
+    </div>
+
     {#if tool === "text"}
       <div class="group">
         <select aria-label="Font" bind:value={font}>
@@ -419,28 +521,41 @@
   </header>
 
   <main bind:this={stage}>
-    <div class="canvas-wrap" style="width:{view.w}px; height:{view.h}px">
-      <canvas
-        bind:this={canvas}
-        class:text-tool={tool === "text"}
+    <div
+      class="backdrop"
+      class:clear={scene.backdrop?.fill === "clear"}
+      style:padding="{preview?.pad ?? 0}px"
+      style:background={scene.backdrop?.fill === "clear" ? undefined : preview?.fill}
+    >
+      <div
+        class="canvas-wrap"
         style="width:{view.w}px; height:{view.h}px"
-        onpointerdown={onPointerDown}
-        onpointermove={onPointerMove}
-        onpointerup={onPointerUp}
-      ></canvas>
-      {#if text}
-        <textarea
-          bind:this={textArea}
-          bind:value={text.value}
-          rows={text.value.split("\n").length}
-          wrap="off"
-          spellcheck="false"
-          aria-label="Text"
-          style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
-          onkeydown={onTextKey}
-          onblur={commitText}
-        ></textarea>
-      {/if}
+        style:border-radius="{preview?.radius ?? 0}px"
+        style:box-shadow={preview?.shadow}
+      >
+        <canvas
+          bind:this={canvas}
+          class:text-tool={tool === "text"}
+          style="width:{view.w}px; height:{view.h}px"
+          style:border-radius="{preview?.radius ?? 0}px"
+          onpointerdown={onPointerDown}
+          onpointermove={onPointerMove}
+          onpointerup={onPointerUp}
+        ></canvas>
+        {#if text}
+          <textarea
+            bind:this={textArea}
+            bind:value={text.value}
+            rows={text.value.split("\n").length}
+            wrap="off"
+            spellcheck="false"
+            aria-label="Text"
+            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
+            onkeydown={onTextKey}
+            onblur={commitText}
+          ></textarea>
+        {/if}
+      </div>
     </div>
     {#if status}
       <div class="status" role="status">{status}</div>
@@ -574,6 +689,77 @@
     background: var(--bg);
     background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
     background-size: 16px 16px;
+  }
+  .backdrop-group {
+    position: relative;
+  }
+  .panel {
+    position: absolute;
+    top: 36px;
+    left: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    width: max-content;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .row .muted {
+    min-width: 56px;
+  }
+  .fill {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    background: var(--fill);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+  }
+  .fill:hover:not(:disabled) {
+    background: var(--fill);
+    transform: scale(1.08);
+  }
+  .fill.off {
+    width: auto;
+    padding: 0 8px;
+    font-size: 12px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .fill.clear,
+  .fill.clear:hover:not(:disabled),
+  .backdrop.clear {
+    background-image: repeating-conic-gradient(#ccc 0 25%, #fff 0 50%);
+    background-size: 10px 10px;
+  }
+  .fill.active {
+    box-shadow:
+      0 0 0 2px var(--panel),
+      0 0 0 4px var(--accent);
+  }
+  .chip {
+    height: 26px;
+    min-width: 34px;
+    padding: 0 8px;
+    font-size: 12px;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .chip.active {
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: none;
+  }
+  .chip.active:hover {
+    background: var(--accent);
   }
   .canvas-wrap {
     position: relative;
