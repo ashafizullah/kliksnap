@@ -99,13 +99,6 @@ const ID: &[(&str, &str)] = &[
     ("PNG image", "Gambar PNG"),
     ("JPEG image", "Gambar JPEG"),
     // Updates
-    ("Update available", "Pembaruan tersedia"),
-    ("Install and Restart", "Pasang dan Mulai Ulang"),
-    ("Later", "Nanti"),
-    (
-        "KlikSnap {new} is available. You have {old}.",
-        "KlikSnap {new} sudah tersedia. Versi Anda {old}.",
-    ),
     (
         "The update could not be installed.",
         "Pembaruan tidak bisa dipasang.",

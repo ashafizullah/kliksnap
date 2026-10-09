@@ -2,10 +2,11 @@
 //! `latest.json`; the updater only installs packages signed with our key.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::i18n::tr;
@@ -30,55 +31,85 @@ pub fn start_background_checks(app: &AppHandle) {
     });
 }
 
-/// The changelog part of the release notes as plain text: the dialog can't
-/// render markdown, and the install instructions after "## Download" are for
-/// people downloading from the release page.
+/// The changelog part of the release notes, as markdown: everything before
+/// "## Download", whose install instructions are for the release page.
 fn changelog(notes: &str) -> String {
-    let mut out = Vec::new();
-    for line in notes.lines() {
-        let line = line.trim_end();
-        if line.trim_start().starts_with("## Download") {
-            break;
-        }
-        let line = if let Some(heading) = line.trim_start().strip_prefix('#') {
-            heading.trim_start_matches('#').trim().to_string()
-        } else if let Some(item) = line.strip_prefix("- ").or(line.strip_prefix("* ")) {
-            format!("• {item}")
-        } else {
-            line.to_string()
-        };
-        out.push(strip_inline(&line));
-    }
-    // Collapse runs of blank lines and trim the ends.
-    let mut text = String::new();
-    for line in out {
-        if line.is_empty() && (text.is_empty() || text.ends_with("\n\n")) {
-            continue;
-        }
-        text.push_str(&line);
-        text.push('\n');
-    }
-    text.trim().to_string()
+    notes
+        .lines()
+        .take_while(|l| !l.trim_start().starts_with("## Download"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
-/// Drops `**`, `__` and backticks, and turns `[text](url)` into `text`.
-fn strip_inline(line: &str) -> String {
-    let line = line.replace("**", "").replace("__", "").replace('`', "");
-    let mut out = String::new();
-    let mut rest = line.as_str();
-    while let Some(open) = rest.find('[') {
-        let Some(close) = rest[open..].find("](").map(|i| open + i) else {
-            break;
-        };
-        let Some(end) = rest[close..].find(')').map(|i| close + i) else {
-            break;
-        };
-        out.push_str(&rest[..open]);
-        out.push_str(&rest[open + 1..close]);
-        rest = &rest[end + 1..];
-    }
-    out.push_str(rest);
-    out
+/// The update found by the last check, waiting in the update window.
+static PENDING: Mutex<Option<Update>> = Mutex::new(None);
+
+#[derive(Clone, serde::Serialize)]
+pub struct Info {
+    version: String,
+    current: String,
+    /// Markdown.
+    notes: String,
+    url: String,
+}
+
+/// What the update window shows.
+pub fn info() -> Option<Info> {
+    let update = PENDING.lock().unwrap().clone()?;
+    Some(Info {
+        notes: changelog(update.body.as_deref().unwrap_or("")),
+        url: release_url(&update.version),
+        version: update.version,
+        current: update.current_version,
+    })
+}
+
+/// Opens the pending update's release page in the browser.
+pub fn open_notes() -> Result<(), String> {
+    let version = PENDING.lock().unwrap().as_ref().map(|u| u.version.clone());
+    let url = release_url(&version.ok_or("no update")?);
+    let program = if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "open"
+    };
+    std::process::Command::new(program)
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn release_url(version: &str) -> String {
+    format!("https://github.com/ashafizullah/kliksnap/releases/tag/v{version}")
+}
+
+#[derive(Clone, serde::Serialize)]
+struct Progress {
+    downloaded: u64,
+    total: Option<u64>,
+}
+
+/// Downloads and installs the pending update, reporting progress to the
+/// update window, then restarts. Returns only on failure.
+pub async fn install(app: &AppHandle) -> Result<(), String> {
+    let update = PENDING.lock().unwrap().clone().ok_or("no update")?;
+    let mut downloaded = 0u64;
+    let progress = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let _ =
+                    progress.emit_to("update", "update:progress", Progress { downloaded, total });
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("{} {e}", tr("The update could not be installed.")))?;
+    app.restart()
 }
 
 /// A message box, attached to `parent` when given so it stays with that
@@ -105,11 +136,8 @@ pub enum Outcome {
     Busy,
 }
 
-/// Checks for an update and offers it in a dialog attached to `parent`.
-pub async fn check_and_offer(
-    app: &AppHandle,
-    parent: Option<&WebviewWindow>,
-) -> Result<Outcome, String> {
+/// Checks for an update and offers it in the update window.
+pub async fn check_and_offer(app: &AppHandle) -> Result<Outcome, String> {
     if CHECKING.swap(true, Ordering::SeqCst) {
         return Ok(Outcome::Busy);
     }
@@ -119,7 +147,7 @@ pub async fn check_and_offer(
     };
     let outcome = match result {
         Ok(Some(update)) => {
-            offer(app, update, parent).await;
+            offer(app, update).await;
             Ok(Outcome::Offered)
         }
         Ok(None) => Ok(Outcome::UpToDate),
@@ -129,47 +157,19 @@ pub async fn check_and_offer(
     outcome
 }
 
-async fn offer(app: &AppHandle, update: Update, parent: Option<&WebviewWindow>) {
-    let notes = changelog(update.body.as_deref().unwrap_or(""));
-    let notes = if notes.chars().count() > 900 {
-        format!("{}…", notes.chars().take(900).collect::<String>())
-    } else {
-        notes
-    };
-    let message = format!(
-        "{}\n\n{notes}",
-        tr("KlikSnap {new} is available. You have {old}.")
-            .replace("{new}", &update.version)
-            .replace("{old}", &update.current_version)
-    );
-    let mut dialog = app
-        .dialog()
-        .message(message.trim_end())
-        .title(tr("Update available"))
-        .buttons(MessageDialogButtons::OkCancelCustom(
-            tr("Install and Restart").into(),
-            tr("Later").into(),
-        ));
-    if let Some(parent) = parent {
-        dialog = dialog.parent(parent);
-    }
-    if dialog.blocking_show() {
-        match update.download_and_install(|_, _| {}, || {}).await {
-            Ok(()) => app.restart(),
-            Err(e) => notify(
-                app,
-                MessageDialogKind::Error,
-                format!("{}\n\n{e}", tr("The update could not be installed.")),
-                parent,
-            ),
-        }
+/// Shows the update in its own window: release notes of any length, and
+/// the download's progress once the user installs it.
+async fn offer(app: &AppHandle, update: Update) {
+    *PENDING.lock().unwrap() = Some(update);
+    if let Err(e) = crate::ui::open_update(app) {
+        eprintln!("update window: {e}");
     }
 }
 
 /// `manual` checks (from the tray) also report "up to date" and errors;
 /// background checks stay quiet.
 pub async fn check(app: AppHandle, manual: bool) {
-    match check_and_offer(&app, None).await {
+    match check_and_offer(&app).await {
         Ok(Outcome::UpToDate) if manual => notify(
             &app,
             MessageDialogKind::Info,
@@ -192,12 +192,10 @@ mod tests {
     use super::changelog;
 
     #[test]
-    fn keeps_the_changelog_as_plain_text() {
-        let notes = "\n### New\n\n- **QR** scanning in `Copy Text` mode\n* See [the docs](https://x.y)\n\n\n### Fixes\n\n- OCR on macOS 27\n\n## Download\n\n**macOS**: download `KlikSnap.dmg`";
-        assert_eq!(
-            changelog(notes),
-            "New\n\n• QR scanning in Copy Text mode\n• See the docs\n\nFixes\n\n• OCR on macOS 27"
-        );
+    fn keeps_the_changelog_before_the_download_section() {
+        let notes =
+            "\n### New\n\n- **QR** scanning\n\n## Download\n\n**macOS**: download `KlikSnap.dmg`";
+        assert_eq!(changelog(notes), "### New\n\n- **QR** scanning");
     }
 
     #[test]

@@ -92,17 +92,32 @@ fn keep_crosshair(window: WebviewWindow) {
 }
 
 /// The Check Now button in Settings: the result shows in Settings itself,
-/// and an update is offered in a dialog attached to it.
+/// and an update is offered in the update window.
 #[tauri::command]
-pub async fn check_updates(app: AppHandle, window: WebviewWindow) -> Result<String, String> {
+pub async fn check_updates(app: AppHandle) -> Result<String, String> {
     use crate::updater::Outcome;
-    match crate::updater::check_and_offer(&app, Some(&window)).await {
+    match crate::updater::check_and_offer(&app).await {
         Ok(Outcome::UpToDate) => Ok(tr("You're up to date: {version} is the latest version.")
             .replace("{version}", &app.package_info().version.to_string())),
         Ok(Outcome::Offered) => Ok(String::new()),
         Ok(Outcome::Busy) => Ok(tr("Already checking…").into()),
         Err(e) => Err(format!("{} {e}", tr("Couldn't check for updates."))),
     }
+}
+
+#[tauri::command]
+pub fn update_info() -> Option<crate::updater::Info> {
+    crate::updater::info()
+}
+
+#[tauri::command]
+pub async fn update_install(app: AppHandle) -> Result<(), String> {
+    crate::updater::install(&app).await
+}
+
+#[tauri::command]
+pub fn update_notes() -> Result<(), String> {
+    crate::updater::open_notes()
 }
 
 #[tauri::command]

@@ -867,6 +867,9 @@ pub fn run() {
             commands::capture,
             commands::toast_text,
             commands::check_updates,
+            commands::update_info,
+            commands::update_install,
+            commands::update_notes,
             commands::app_version,
             commands::quit,
         ])

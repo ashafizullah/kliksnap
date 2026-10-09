@@ -143,6 +143,18 @@ const ID: Record<string, string> = {
   "Share (AirDrop, Messages, Mail…)": "Bagikan (AirDrop, Pesan, Mail…)",
   "Save As…": "Simpan Sebagai…",
 
+  // Update
+  "KlikSnap {version} is available": "KlikSnap {version} sudah tersedia",
+  "You have {version}.": "Versi Anda {version}.",
+  "No release notes.": "Tidak ada catatan rilis.",
+  "Read more": "Baca selengkapnya",
+  "Show less": "Tampilkan lebih sedikit",
+  "Full release notes on GitHub": "Catatan rilis lengkap di GitHub",
+  "Downloading… {percent}": "Mengunduh… {percent}",
+  "Installing and restarting…": "Memasang dan memulai ulang…",
+  Later: "Nanti",
+  "Install and Restart": "Pasang dan Mulai Ulang",
+
   // Settings
   Settings: "Pengaturan",
   General: "Umum",
