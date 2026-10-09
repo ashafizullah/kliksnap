@@ -17,6 +17,8 @@ pub struct Settings {
     pub hotkey_last_area: String,
     /// Starts recording an area, and stops the recording. Off by default.
     pub hotkey_record: String,
+    /// Starts a scrolling capture. Off by default.
+    pub hotkey_scroll: String,
     /// Windows: Print Screen also captures an area, instead of opening the
     /// Snipping Tool.
     pub print_screen: bool,
@@ -37,6 +39,12 @@ pub struct Settings {
     pub record_countdown: u32,
     /// Recordings are scaled to this percentage of the screen's pixels.
     pub record_scale: u32,
+    /// MP4 recordings carry what the computer plays (macOS 13+).
+    pub record_system_audio: bool,
+    /// MP4 recordings carry the microphone (macOS 15+).
+    pub record_mic: bool,
+    /// How many recent captures History keeps; 0 keeps none.
+    pub history_limit: u32,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
     pub preview_secs: u32,
     /// Area/window selection over the live screen, captured once the
@@ -47,6 +55,8 @@ pub struct Settings {
     /// Windows: hiding the tray icon keeps KlikSnap running on its shortcuts;
     /// launching it again opens Settings.
     pub show_tray: bool,
+    /// "auto" (the system's language), "en" or "id".
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -58,6 +68,7 @@ impl Default for Settings {
             hotkey_text: "Alt+Shift+2".into(),
             hotkey_last_area: String::new(),
             hotkey_record: String::new(),
+            hotkey_scroll: String::new(),
             print_screen: false,
             save_dir: String::new(),
             auto_copy: true,
@@ -68,11 +79,15 @@ impl Default for Settings {
             file_template: crate::output::DEFAULT_TEMPLATE.into(),
             record_countdown: 3,
             record_scale: 100,
+            record_system_audio: false,
+            record_mic: false,
             preview_secs: 6,
+            history_limit: 50,
             live_selection: true,
             launch_at_login: false,
             check_updates: true,
             show_tray: true,
+            language: "auto".into(),
         }
     }
 }

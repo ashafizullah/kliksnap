@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { closeWindow, imageUrl, invoke, param, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   const secs = Number(param("t") ?? 6);
 
@@ -71,19 +72,19 @@
   onmouseenter={() => setHover(true)}
   onmouseleave={() => setHover(false)}
 >
-  <img src={imageUrl(`shot-${id}`)} alt="Screenshot" draggable="false" onload={onLoad} onerror={closeWindow} />
+  <img src={imageUrl(`shot-${id}`)} alt={tr("Screenshot")} draggable="false" onload={onLoad} onerror={closeWindow} />
 
   <div class="actions">
-    <button class="close" title="Close" aria-label="Close" onclick={closeWindow}>
+    <button class="close" title={tr("Close")} aria-label={tr("Close")} onclick={closeWindow}>
       <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
     </button>
-    <button class="edit" onclick={edit}>Annotate</button>
+    <button class="edit" onclick={edit}>{tr("Annotate")}</button>
     <div class="row">
-      <button onclick={copy}>Copy</button>
-      <button onclick={save}>Save</button>
-      <button title="Keep on screen" onclick={pin}>Pin</button>
+      <button onclick={copy}>{tr("Copy")}</button>
+      <button onclick={save}>{tr("Save")}</button>
+      <button title={tr("Keep on screen")} onclick={pin}>{tr("Pin")}</button>
     </div>
-    <button class="wide" onclick={saveCopy}>Save & Copy</button>
+    <button class="wide" onclick={saveCopy}>{tr("Save & Copy")}</button>
   </div>
 
   {#if status}

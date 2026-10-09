@@ -9,6 +9,41 @@ pub fn recognize(img: &RgbaImage) -> Result<String, String> {
     imp::recognize(img)
 }
 
+/// A recognized word and where it is, in image pixels (`x, y, w, h`).
+#[derive(Clone, Debug)]
+pub struct Word {
+    pub text: String,
+    pub rect: [f64; 4],
+    /// Words on the same line share this number.
+    pub line: usize,
+}
+
+/// The words in the image, in reading order.
+pub fn words(img: &RgbaImage) -> Result<Vec<Word>, String> {
+    imp::words(img)
+}
+
+/// Byte ranges of the whitespace-separated words in `s`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn word_ranges(s: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in s.char_indices() {
+        match (c.is_whitespace(), start) {
+            (false, None) => start = Some(i),
+            (true, Some(st)) => {
+                out.push((st, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(st) = start {
+        out.push((st, s.len()));
+    }
+    out
+}
+
 /// The payloads of the QR codes (and on macOS, other barcodes) in the image.
 pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
     imp::scan_codes(img)
@@ -21,6 +56,8 @@ mod imp {
     use objc2::rc::{autoreleasepool, Allocated, Retained};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{msg_send, sel};
+    use objc2_core_foundation::CGRect;
+    use objc2_foundation::NSRange;
     use xcap::image::RgbaImage;
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -74,6 +111,11 @@ mod imp {
         with_cg_image(img, |cg_image| unsafe { run_barcodes(cg_image) })
     }
 
+    pub fn words(img: &RgbaImage) -> Result<Vec<super::Word>, String> {
+        let size = (img.width() as f64, img.height() as f64);
+        with_cg_image(img, |cg_image| unsafe { run_words(cg_image, size) })
+    }
+
     fn with_cg_image<T>(
         img: &RgbaImage,
         f: impl FnOnce(*mut c_void) -> Result<T, String>,
@@ -125,7 +167,7 @@ mod imp {
         to_string(message).unwrap_or_else(|| "text recognition failed".into())
     }
 
-    unsafe fn run_vision(cg_image: *mut c_void) -> Result<String, String> {
+    unsafe fn text_request() -> Result<Retained<AnyObject>, String> {
         let request: Retained<AnyObject> = msg_send![class(c"VNRecognizeTextRequest")?, new];
         let _: () = msg_send![&*request, setRevision: REVISION];
         let _: () = msg_send![&*request, setRecognitionLevel: REQUEST_ACCURATE];
@@ -135,7 +177,11 @@ mod imp {
         if auto_language.as_bool() {
             let _: () = msg_send![&*request, setAutomaticallyDetectsLanguage: true];
         }
+        Ok(request)
+    }
 
+    unsafe fn run_vision(cg_image: *mut c_void) -> Result<String, String> {
+        let request = text_request()?;
         let mut lines = Vec::new();
         for observation in perform(cg_image, &request)? {
             let candidates: *mut AnyObject = msg_send![observation, topCandidates: 1usize];
@@ -147,6 +193,49 @@ mod imp {
             lines.extend(to_string(string));
         }
         Ok(lines.join("\n"))
+    }
+
+    /// Each line's words with their boxes. Vision boxes are normalized with
+    /// the origin at the bottom left.
+    unsafe fn run_words(
+        cg_image: *mut c_void,
+        (w, h): (f64, f64),
+    ) -> Result<Vec<super::Word>, String> {
+        let request = text_request()?;
+        let mut words = Vec::new();
+        for (line, observation) in perform(cg_image, &request)?.into_iter().enumerate() {
+            let candidates: *mut AnyObject = msg_send![observation, topCandidates: 1usize];
+            let best: *mut AnyObject = msg_send![candidates, firstObject];
+            if best.is_null() {
+                continue;
+            }
+            let ns: *mut AnyObject = msg_send![best, string];
+            let Some(text) = to_string(ns) else { continue };
+            for (start, end) in super::word_ranges(&text) {
+                // NSRange counts UTF-16 units.
+                let loc = text[..start].encode_utf16().count();
+                let len = text[start..end].encode_utf16().count();
+                let range = NSRange::new(loc, len);
+                let mut error: *mut AnyObject = std::ptr::null_mut();
+                let rect: *mut AnyObject =
+                    msg_send![best, boundingBoxForRange: range, error: &mut error];
+                if rect.is_null() {
+                    continue;
+                }
+                let b: CGRect = msg_send![rect, boundingBox];
+                words.push(super::Word {
+                    text: text[start..end].to_string(),
+                    rect: [
+                        b.origin.x * w,
+                        (1.0 - b.origin.y - b.size.height) * h,
+                        b.size.width * w,
+                        b.size.height * h,
+                    ],
+                    line,
+                });
+            }
+        }
+        Ok(words)
     }
 
     unsafe fn run_barcodes(cg_image: *mut c_void) -> Result<Vec<String>, String> {
@@ -197,20 +286,55 @@ mod imp {
 #[cfg(target_os = "windows")]
 mod imp {
     use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
-    use windows::Media::Ocr::OcrEngine;
+    use windows::Media::Ocr::{OcrEngine, OcrResult};
     use windows::Storage::Streams::DataWriter;
     use xcap::image::{imageops, RgbaImage};
 
     pub fn recognize(img: &RgbaImage) -> Result<String, String> {
-        run(img).map_err(|e| e.message().to_string())
+        let result = run(img).map_err(|e| e.message().to_string())?.0;
+        let mut lines = Vec::new();
+        for line in result.Lines().map_err(|e| e.message().to_string())? {
+            lines.push(
+                line.Text()
+                    .map_err(|e| e.message().to_string())?
+                    .to_string(),
+            );
+        }
+        Ok(lines.join("\n"))
     }
 
-    fn run(img: &RgbaImage) -> windows::core::Result<String> {
+    pub fn words(img: &RgbaImage) -> Result<Vec<super::Word>, String> {
+        let collect = || -> windows::core::Result<Vec<super::Word>> {
+            let (result, k) = run(img)?;
+            let mut words = Vec::new();
+            for (line, l) in result.Lines()?.into_iter().enumerate() {
+                for w in l.Words()? {
+                    let r = w.BoundingRect()?;
+                    words.push(super::Word {
+                        text: w.Text()?.to_string(),
+                        rect: [
+                            r.X as f64 / k,
+                            r.Y as f64 / k,
+                            r.Width as f64 / k,
+                            r.Height as f64 / k,
+                        ],
+                        line,
+                    });
+                }
+            }
+            Ok(words)
+        };
+        collect().map_err(|e| e.message().to_string())
+    }
+
+    /// Runs the engine; also returns the factor the image was scaled by.
+    fn run(img: &RgbaImage) -> windows::core::Result<(OcrResult, f64)> {
         // The engine rejects images larger than MaxImageDimension.
         let max = OcrEngine::MaxImageDimension()?;
         let scaled;
+        let mut k = 1.0;
         let img = if img.width() > max || img.height() > max {
-            let k = max as f64 / img.width().max(img.height()) as f64;
+            k = max as f64 / img.width().max(img.height()) as f64;
             let (w, h) = (
                 (img.width() as f64 * k) as u32,
                 (img.height() as f64 * k) as u32,
@@ -240,11 +364,7 @@ mod imp {
         )?;
         let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
         let result = engine.RecognizeAsync(&bitmap)?.join()?;
-        let mut lines = Vec::new();
-        for line in result.Lines()? {
-            lines.push(line.Text()?.to_string());
-        }
-        Ok(lines.join("\n"))
+        Ok((result, k))
     }
 
     pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
@@ -275,6 +395,10 @@ mod imp {
 
     pub fn scan_codes(_img: &RgbaImage) -> Result<Vec<String>, String> {
         Ok(Vec::new())
+    }
+
+    pub fn words(_img: &RgbaImage) -> Result<Vec<super::Word>, String> {
+        Err("text recognition is not supported on this platform".into())
     }
 }
 

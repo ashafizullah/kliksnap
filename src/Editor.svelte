@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { closeWindow, imageUrl, invoke, isMac, loadImage, param, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
   import {
     COLORS,
     DEFAULT_BACKDROP,
@@ -128,6 +129,37 @@
   function clearAll() {
     text = null;
     if (scene.shapes.length || scene.crop) commit({ ...scene, shapes: [], crop: null });
+  }
+
+  let redacting = $state(false);
+
+  /** Pixelates the email addresses, numbers, keys and passwords the OCR finds. */
+  async function autoRedact() {
+    if (redacting) return;
+    redacting = true;
+    try {
+      const boxes = await invoke<[number, number, number, number][]>("find_sensitive", { id });
+      if (!boxes.length) {
+        flash(tr("Nothing sensitive found"));
+        return;
+      }
+      const pad = 2 * scale;
+      const shapes: Shape[] = boxes.map(([x, y, w, h]) => ({
+        kind: "pixelate",
+        x1: x - pad,
+        y1: y - pad,
+        x2: x + w + pad,
+        y2: y + h + pad,
+        color,
+        size: sizes.pixelate,
+      }));
+      commit({ ...scene, shapes: [...scene.shapes, ...shapes] });
+      flash(tr("Hid {n} item(s). Check the result, OCR can miss things", { n: boxes.length }));
+    } catch (e) {
+      flash(tr("Redact failed: {e}", { e: String(e) }));
+    } finally {
+      redacting = false;
+    }
   }
 
   function setBackdrop(change: Partial<Backdrop> | null) {
@@ -305,7 +337,7 @@
       });
       if (action === "copy" || action === "pin" || path) closeWindow();
     } catch (e) {
-      flash(`Export failed: ${e}`);
+      flash(tr("Export failed: {e}", { e: String(e) }));
     }
   }
 
@@ -371,13 +403,13 @@
 
 <div class="app">
   <header>
-    <div class="group" role="toolbar" aria-label="Tools">
+    <div class="group" role="toolbar" aria-label={tr("Tools")}>
       {#each TOOLS as t (t.id)}
         <button
           class="icon"
           class:active={tool === t.id}
-          title="{t.label} ({t.key.toUpperCase()})"
-          aria-label={t.label}
+          title="{tr(t.label)} ({t.key.toUpperCase()})"
+          aria-label={tr(t.label)}
           aria-pressed={tool === t.id}
           onclick={() => (tool = t.id)}
         >
@@ -386,14 +418,14 @@
       {/each}
     </div>
 
-    <div class="group" role="radiogroup" aria-label="Color">
+    <div class="group" role="radiogroup" aria-label={tr("Color")}>
       {#each COLORS as c (c)}
         <button
           class="swatch"
           class:active={color === c}
           style="--c:{c}"
           title={c}
-          aria-label="Color {c}"
+          aria-label={tr("Color {c}", { c })}
           aria-pressed={color === c}
           onclick={() => (color = c)}
         ></button>
@@ -401,16 +433,16 @@
     </div>
 
     <div class="group">
-      <button class="icon" title="Undo ({mod}Z)" aria-label="Undo" disabled={!past.length} onclick={undo}>
+      <button class="icon" title="{tr('Undo')} ({mod}Z)" aria-label={tr("Undo")} disabled={!past.length} onclick={undo}>
         <svg viewBox="0 0 18 18"><path d="M5 8h7a3 3 0 010 6H9M5 8l3-3M5 8l3 3" /></svg>
       </button>
-      <button class="icon" title="Redo ({mod}⇧Z)" aria-label="Redo" disabled={!future.length} onclick={redo}>
+      <button class="icon" title="{tr('Redo')} ({mod}⇧Z)" aria-label={tr("Redo")} disabled={!future.length} onclick={redo}>
         <svg viewBox="0 0 18 18"><path d="M13 8H6a3 3 0 000 6h3M13 8l-3-3M13 8l-3 3" /></svg>
       </button>
       <button
         class="icon"
-        title="Clear All ({mod}⌫)"
-        aria-label="Clear all"
+        title="{tr('Clear All')} ({mod}⌫)"
+        aria-label={tr("Clear all")}
         disabled={!scene.shapes.length && !scene.crop}
         onclick={clearAll}
       >
@@ -420,10 +452,12 @@
 
     <div class="group size" class:off={!sizeSpec}>
       <label
-        title={sizeSpec ? `${sizeSpec.label} (1 2 3, [ ]; double-click to reset)` : "This tool has no size"}
+        title={sizeSpec
+          ? tr("{label} (1 2 3, [ ]; double-click to reset)", { label: tr(sizeSpec.label) })
+          : tr("This tool has no size")}
         ondblclick={() => sizeSpec && (sizes[tool] = sizeSpec.presets[1])}
       >
-        <span class="muted">{sizeSpec?.label ?? "Size"}</span>
+        <span class="muted">{tr(sizeSpec?.label ?? "Size")}</span>
         {#if sizeSpec}
           <input type="range" min={sizeSpec.min} max={sizeSpec.max} step="1" bind:value={sizes[tool]} />
           <span class="value">{sizes[tool]}</span>
@@ -434,35 +468,47 @@
       </label>
     </div>
 
+    <div class="group">
+      <button
+        class="icon"
+        title={tr("Hide emails, numbers, keys and passwords (OCR)")}
+        aria-label={tr("Auto redact")}
+        disabled={redacting}
+        onclick={autoRedact}
+      >
+        <svg viewBox="0 0 18 18"><path d="M2 9s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM3 15L15 3" /></svg>
+      </button>
+    </div>
+
     <div class="group backdrop-group">
       <button
         class="icon"
         class:active={!!scene.backdrop}
-        title="Background"
-        aria-label="Background"
+        title={tr("Background")}
+        aria-label={tr("Background")}
         aria-expanded={backdropPanel}
         onclick={() => (backdropPanel = !backdropPanel)}
       >
         <svg viewBox="0 0 18 18"><path d="M2.5 2.5h13v13h-13zM6 6h6v6H6z" /></svg>
       </button>
       {#if backdropPanel}
-        <div class="panel" role="dialog" aria-label="Background">
+        <div class="panel" role="dialog" aria-label={tr("Background")}>
           <div class="row fills">
-            <button class="fill off" class:active={!scene.backdrop} title="No background" onclick={() => setBackdrop(null)}>Off</button>
+            <button class="fill off" class:active={!scene.backdrop} title={tr("No background")} onclick={() => setBackdrop(null)}>{tr("Off")}</button>
             {#each Object.entries(FILLS) as [fid, f] (fid)}
               <button
                 class="fill"
                 class:active={scene.backdrop?.fill === fid}
                 class:clear={fid === "clear"}
                 style="--fill:{fillCss(fid as FillId)}"
-                title={f.label}
-                aria-label="{f.label} background"
+                title={tr(f.label)}
+                aria-label={tr("{label} background", { label: tr(f.label) })}
                 onclick={() => setBackdrop({ fill: fid as FillId })}
               ></button>
             {/each}
           </div>
           <div class="row">
-            <span class="muted">Padding</span>
+            <span class="muted">{tr("Padding")}</span>
             {#each PADDINGS as p (p.value)}
               <button
                 class="chip"
@@ -472,12 +518,12 @@
             {/each}
           </div>
           <div class="row">
-            <span class="muted">Corners</span>
+            <span class="muted">{tr("Corners")}</span>
             {#each RADII as r (r.value)}
               <button
                 class="chip"
                 class:active={(scene.backdrop ?? lastBackdrop).radius === r.value}
-                onclick={() => setBackdrop({ radius: r.value })}>{r.label}</button
+                onclick={() => setBackdrop({ radius: r.value })}>{tr(r.label)}</button
               >
             {/each}
           </div>
@@ -487,7 +533,7 @@
               checked={(scene.backdrop ?? lastBackdrop).shadow}
               onchange={(e) => setBackdrop({ shadow: e.currentTarget.checked })}
             />
-            <span>Shadow</span>
+            <span>{tr("Shadow")}</span>
           </label>
         </div>
       {/if}
@@ -495,12 +541,12 @@
 
     {#if tool === "text"}
       <div class="group">
-        <select aria-label="Font" bind:value={font}>
+        <select aria-label={tr("Font")} bind:value={font}>
           {#each Object.entries(FONTS) as [fid, f] (fid)}
             <option value={fid}>{f.label}</option>
           {/each}
         </select>
-        <button class="icon" class:active={bold} title="Bold" aria-label="Bold" aria-pressed={bold} onclick={() => (bold = !bold)}>
+        <button class="icon" class:active={bold} title={tr("Bold")} aria-label={tr("Bold")} aria-pressed={bold} onclick={() => (bold = !bold)}>
           <b>B</b>
         </button>
       </div>
@@ -509,14 +555,18 @@
     <div class="spacer"></div>
 
     <div class="group actions">
-      <button bind:this={shareButton} title={isMac ? "Share (AirDrop, Messages, Mail…)" : "Share"} onclick={() => exportImage("share")}>
-        Share
+      <button
+        bind:this={shareButton}
+        title={isMac ? tr("Share (AirDrop, Messages, Mail…)") : tr("Share")}
+        onclick={() => exportImage("share")}
+      >
+        {tr("Share")}
       </button>
-      <button title="Keep on screen ({mod}P)" onclick={() => exportImage("pin")}>Pin</button>
-      <button title="Save As… ({mod}⇧S)" onclick={() => exportImage("saveas")}>Save As…</button>
-      <button title="Save ({mod}S)" onclick={() => exportImage("save")}>Save</button>
-      <button title="Save & Copy ({mod}⇧C)" onclick={() => exportImage("savecopy")}>Save & Copy</button>
-      <button class="primary" title="Copy ({mod}C)" onclick={() => exportImage("copy")}>Copy</button>
+      <button title="{tr('Keep on screen')} ({mod}P)" onclick={() => exportImage("pin")}>{tr("Pin")}</button>
+      <button title="{tr('Save As…')} ({mod}⇧S)" onclick={() => exportImage("saveas")}>{tr("Save As…")}</button>
+      <button title="{tr('Save')} ({mod}S)" onclick={() => exportImage("save")}>{tr("Save")}</button>
+      <button title="{tr('Save & Copy')} ({mod}⇧C)" onclick={() => exportImage("savecopy")}>{tr("Save & Copy")}</button>
+      <button class="primary" title="{tr('Copy')} ({mod}C)" onclick={() => exportImage("copy")}>{tr("Copy")}</button>
     </div>
   </header>
 
@@ -549,7 +599,7 @@
             rows={text.value.split("\n").length}
             wrap="off"
             spellcheck="false"
-            aria-label="Text"
+            aria-label={tr("Text")}
             style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
             onkeydown={onTextKey}
             onblur={commitText}

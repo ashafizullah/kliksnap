@@ -114,9 +114,10 @@ where
     format!("{stem}.{ext}")
 }
 
-pub fn recording_name() -> String {
+/// `ext` is "mp4" or "gif".
+pub fn recording_name(ext: &str) -> String {
     chrono::Local::now()
-        .format("KlikSnap Recording %Y-%m-%d at %H.%M.%S.mp4")
+        .format(&format!("KlikSnap Recording %Y-%m-%d at %H.%M.%S.{ext}"))
         .to_string()
 }
 

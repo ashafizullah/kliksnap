@@ -1,11 +1,18 @@
+#[cfg(any(target_os = "windows", test))]
+mod audio_mix;
 mod capture;
 mod commands;
+mod gif_writer;
+mod history;
 mod hotkeys;
+mod i18n;
 mod ocr;
 mod output;
 mod platform;
 mod record;
+mod redact;
 mod settings;
+mod stitch;
 mod tray;
 mod ui;
 mod updater;
@@ -16,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::http::{header, Response};
-use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::Shortcut;
 use xcap::image::RgbaImage;
 
@@ -48,7 +55,21 @@ pub struct AppState {
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
     toast: Mutex<Toast>,
     recording: Mutex<Option<Recording>>,
+    /// The scrolling capture in progress.
+    scroll: Mutex<Option<ScrollSession>>,
+    /// Pins that let clicks through to the windows below, by window label.
+    click_through: Mutex<std::collections::HashSet<String>>,
 }
+
+struct ScrollSession {
+    /// 0 while capturing, then DONE or CANCEL.
+    stop: Arc<std::sync::atomic::AtomicU8>,
+    /// The controls' window number (macOS), so captures leave them out.
+    controls: Arc<AtomicU32>,
+}
+
+const SCROLL_DONE: u8 = 1;
+const SCROLL_CANCEL: u8 = 2;
 
 struct Recording {
     recorder: record::Recorder,
@@ -85,6 +106,8 @@ impl AppState {
             hotkeys: Mutex::default(),
             toast: Mutex::default(),
             recording: Mutex::default(),
+            click_through: Mutex::default(),
+            scroll: Mutex::default(),
         }
     }
 
@@ -127,7 +150,7 @@ impl AppState {
 pub fn start_capture(app: &AppHandle, mode: Mode) {
     let state = app.state::<AppState>();
     // The record shortcut and menu items stop a recording in progress.
-    if matches!(mode, Mode::Record | Mode::RecordScreen)
+    if matches!(mode, Mode::Record | Mode::RecordScreen | Mode::RecordGif)
         && state.recording.lock().unwrap().is_some()
     {
         stop_recording(app);
@@ -167,7 +190,7 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
         let bounds = capture::bounds_at(platform::cursor_pos())?;
         state.busy.store(false, Ordering::SeqCst);
         reveal_previews(app);
-        start_recording(app, bounds, [0.0, 0.0, 1.0, 1.0]);
+        start_recording(app, bounds, [0.0, 0.0, 1.0, 1.0], false);
         return Ok(());
     }
     if mode == Mode::Screen {
@@ -228,14 +251,30 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         return;
     };
     let mode = *state.mode.lock().unwrap();
-    if mode == Mode::Record {
+    if mode == Mode::Scroll {
+        state.busy.store(false, Ordering::SeqCst);
+        reveal_previews(app);
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            if let Err(e) = scroll_capture(&app, f.bounds, rect) {
+                let toast = Toast {
+                    title: format!("{}: {e}", i18n::tr("Scrolling capture failed")),
+                    ..Default::default()
+                };
+                let _ = show_toast(&app, toast, &f.bounds);
+            }
+        });
+        return;
+    }
+    if matches!(mode, Mode::Record | Mode::RecordGif) {
         state.busy.store(false, Ordering::SeqCst);
         reveal_previews(app);
         let app = app.clone();
         std::thread::spawn(move || {
             // Give the overlays time to leave the screen.
             std::thread::sleep(Duration::from_millis(150));
-            start_recording(&app, f.bounds, rect);
+            start_recording(&app, f.bounds, rect, mode == Mode::RecordGif);
         });
         return;
     }
@@ -284,13 +323,13 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
         Vec::new()
     });
     let (title, result) = if codes.is_empty() {
-        ("Text copied", ocr::recognize(img))
+        (i18n::tr("Text copied"), ocr::recognize(img))
     } else {
-        ("QR code copied", Ok(codes.join("\n")))
+        (i18n::tr("QR code copied"), Ok(codes.join("\n")))
     };
     let toast = match result {
         Ok(text) if text.trim().is_empty() => Toast {
-            title: "No text found".into(),
+            title: i18n::tr("No text found").into(),
             ..Default::default()
         },
         Ok(text) => {
@@ -304,7 +343,7 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
             }
         }
         Err(e) => Toast {
-            title: format!("Text recognition failed: {e}"),
+            title: format!("{}: {e}", i18n::tr("Text recognition failed")),
             ..Default::default()
         },
     };
@@ -331,7 +370,7 @@ pub(crate) fn pick_color(app: &AppHandle, index: usize, hex: &str) -> Result<(),
         .and_then(|mut c| c.set_text(hex.clone()))
         .map_err(|e| e.to_string())?;
     let toast = Toast {
-        title: "Color copied".into(),
+        title: i18n::tr("Color copied").into(),
         text: hex,
         ..Default::default()
     };
@@ -349,8 +388,8 @@ fn show_toast(app: &AppHandle, toast: Toast, bounds: &Bounds) -> Result<(), Stri
 }
 
 /// Starts recording `rect` (fractions of the monitor at `bounds`) into the
-/// save folder, with a Stop control in the corner.
-fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) {
+/// save folder, as a GIF if `gif`, with a Stop control in the corner.
+fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let state = app.state::<AppState>();
     let secs = state.settings().record_countdown;
     if secs > 0 {
@@ -365,10 +404,17 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) {
     }
     let settings = state.settings();
     let dir = settings.save_dir(app);
-    let path = output::unique_path(&dir, &output::recording_name());
+    let ext = if gif { "gif" } else { "mp4" };
+    let path = output::unique_path(&dir, &output::recording_name(ext));
     let started = std::fs::create_dir_all(&dir)
         .map_err(|e| e.to_string())
-        .and_then(|_| record::start(&bounds, rect, settings.record_scale, &path));
+        .and_then(|_| {
+            let audio = record::Audio {
+                system: settings.record_system_audio,
+                mic: settings.record_mic,
+            };
+            record::start(&bounds, rect, settings.record_scale, &path, audio)
+        });
     match started {
         Ok(recorder) => {
             *state.recording.lock().unwrap() = Some(Recording {
@@ -383,11 +429,79 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) {
         }
         Err(e) => {
             let toast = Toast {
-                title: format!("Recording failed: {e}"),
+                title: format!("{}: {e}", i18n::tr("Recording failed")),
                 ..Default::default()
             };
             let _ = show_toast(app, toast, &bounds);
         }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ScrollProgress {
+    height: usize,
+    /// The last frame didn't line up: scrolled too fast or upwards.
+    lost: bool,
+    full: bool,
+}
+
+/// Captures `rect` (fractions of the monitor at `bounds`) again and again
+/// while the user scrolls it, stitching the frames, until Done or Cancel in
+/// the controls. Blocking: call off the main thread.
+fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let session = ScrollSession {
+        stop: Arc::default(),
+        controls: Arc::default(),
+    };
+    let (stop, controls) = (session.stop.clone(), session.controls.clone());
+    *state.scroll.lock().unwrap() = Some(session);
+    let result = (|| -> Result<stitch::Stitcher, String> {
+        ui::show_scroll(app, &bounds, rect).map_err(|e| e.to_string())?;
+        // macOS captures what is below the controls, so it needs their window number.
+        let wait = std::time::Instant::now();
+        while cfg!(target_os = "macos")
+            && controls.load(Ordering::SeqCst) == 0
+            && wait.elapsed() < Duration::from_secs(3)
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let grab = || capture::under_overlay(&bounds, controls.load(Ordering::SeqCst), rect);
+        let first = grab().ok_or("couldn't capture the area")?;
+        let mut stitcher = stitch::Stitcher::new(&first);
+        let mut last = None;
+        while stop.load(Ordering::SeqCst) == 0 {
+            std::thread::sleep(Duration::from_millis(80));
+            let Some(frame) = grab() else { continue };
+            let step = stitcher.push(&frame);
+            let progress = ScrollProgress {
+                height: stitcher.height(),
+                lost: step == stitch::Step::Lost,
+                full: step == stitch::Step::Full,
+            };
+            if last.as_ref() != Some(&(progress.height, progress.lost, progress.full)) {
+                last = Some((progress.height, progress.lost, progress.full));
+                let _ = app.emit_to("scroll", "scroll:progress", progress);
+            }
+        }
+        Ok(stitcher)
+    })();
+    *state.scroll.lock().unwrap() = None;
+    if let Some(win) = app.get_webview_window("scroll") {
+        let _ = win.destroy();
+    }
+    let stitcher = result?;
+    if stop.load(Ordering::SeqCst) == SCROLL_DONE {
+        finish_shot(app, stitcher.finish(), bounds, None)?;
+    }
+    Ok(())
+}
+
+/// The Done and Cancel buttons of a scrolling capture.
+pub fn end_scroll(app: &AppHandle, done: bool) {
+    if let Some(s) = app.state::<AppState>().scroll.lock().unwrap().as_ref() {
+        let code = if done { SCROLL_DONE } else { SCROLL_CANCEL };
+        s.stop.store(code, Ordering::SeqCst);
     }
 }
 
@@ -404,7 +518,11 @@ pub fn stop_recording(app: &AppHandle) {
     std::thread::spawn(move || {
         let toast = match rec.recorder.stop() {
             Ok(()) => Toast {
-                title: "Recording saved".into(),
+                title: if record::is_gif(&rec.path) {
+                    i18n::tr("GIF saved").into()
+                } else {
+                    i18n::tr("Recording saved").into()
+                },
                 text: rec
                     .path
                     .file_name()
@@ -413,7 +531,7 @@ pub fn stop_recording(app: &AppHandle) {
                 path: rec.path.display().to_string(),
             },
             Err(e) => Toast {
-                title: format!("Recording failed: {e}"),
+                title: format!("{}: {e}", i18n::tr("Recording failed")),
                 ..Default::default()
             },
         };
@@ -509,18 +627,74 @@ fn finish_shot(
     // takes the lock in `on_window_destroyed`.
     let previews = state.previews.lock().unwrap().clone();
     ui::stack_previews(app, &previews, &bounds);
-    if s.auto_copy {
-        output::copy(&img)?;
-    }
     if s.auto_save {
         let path = output::unique_path(&s.save_dir(app), &s.file_name());
         output::save(&img, &path, s.format())?;
     }
+    if s.history_limit > 0 {
+        let (app, img, limit) = (app.clone(), img.clone(), s.history_limit);
+        std::thread::spawn(move || {
+            if let Err(e) = history::add(&app, &img, bounds.scale, limit) {
+                eprintln!("history: {e}");
+            }
+        });
+    }
+    if s.auto_copy {
+        output::copy(&img)?;
+    }
     Ok(())
 }
 
-/// Serves captures to the webviews as `ks://localhost/<name>`.
-fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
+/// Pins the image on the clipboard, centered on the screen under the cursor.
+pub fn pin_clipboard(app: &AppHandle) {
+    let bounds = match capture::bounds_at(platform::cursor_pos()) {
+        Ok(b) => b,
+        Err(e) => return eprintln!("pin clipboard: {e}"),
+    };
+    let img = arboard::Clipboard::new()
+        .and_then(|mut c| c.get_image())
+        .ok();
+    let img = img
+        .and_then(|i| RgbaImage::from_raw(i.width as u32, i.height as u32, i.bytes.into_owned()));
+    let Some(img) = img else {
+        let toast = Toast {
+            title: i18n::tr("No image on the clipboard").into(),
+            ..Default::default()
+        };
+        let _ = show_toast(app, toast, &bounds);
+        return;
+    };
+    let id = app.state::<AppState>().insert_shot(Shot {
+        img: Arc::new(img),
+        bounds,
+        origin: None,
+        refs: 0,
+    });
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = commands::open_pin(&app, id) {
+            eprintln!("pin clipboard: {e}");
+        }
+    });
+}
+
+/// Makes every click-through pin take clicks again.
+pub fn release_click_through(app: &AppHandle) {
+    let labels = std::mem::take(&mut *app.state::<AppState>().click_through.lock().unwrap());
+    for label in labels {
+        if let Some(win) = app.get_webview_window(&label) {
+            let _ = win.set_ignore_cursor_events(false);
+            let _ = win.emit_to(&label, "pin:click-through", false);
+        }
+    }
+    tray::refresh(app);
+}
+
+/// Serves captures to the webviews as `ks://localhost/<name>`, with their type.
+fn serve_image(app: &AppHandle, name: &str) -> Option<(Vec<u8>, &'static str)> {
+    if let Some(id) = name.strip_prefix("hist-") {
+        return Some((history::thumbnail(app, id)?, "image/jpeg"));
+    }
     let state = app.state::<AppState>();
     let mut parts = name.split('-');
     let kind = parts.next()?;
@@ -528,9 +702,12 @@ fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     match kind {
         "frozen" => {
             let frozen = state.frozen.lock().unwrap();
-            Some(output::bmp(frozen.get(n as usize)?.img.as_ref()?))
+            Some((
+                output::bmp(frozen.get(n as usize)?.img.as_ref()?),
+                "image/bmp",
+            ))
         }
-        "shot" => Some(output::bmp(&state.shot(n)?.0)),
+        "shot" => Some((output::bmp(&state.shot(n)?.0), "image/bmp")),
         _ => None,
     }
 }
@@ -559,6 +736,9 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
     } else if label.starts_with("editor-") || label.starts_with("pin-") {
         if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
+        }
+        if state.click_through.lock().unwrap().remove(label) {
+            tray::refresh(app);
         }
     } else if label.starts_with("overlay-")
         && ui::overlays(app).iter().all(|w| w.label() == label)
@@ -589,8 +769,8 @@ pub fn run() {
             let name = request.uri().path().trim_start_matches('/').to_string();
             std::thread::spawn(move || {
                 let response = match serve_image(&app, &name) {
-                    Some(bytes) => Response::builder()
-                        .header(header::CONTENT_TYPE, "image/bmp")
+                    Some((bytes, mime)) => Response::builder()
+                        .header(header::CONTENT_TYPE, mime)
                         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                         .header(header::CACHE_CONTROL, "no-store")
                         .body(bytes),
@@ -603,6 +783,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let (s, first_run) = settings::load(app.handle());
+            i18n::set(&s.language);
             app.manage(AppState::new(s.clone()));
             tray::create(app.handle())?;
             app.on_menu_event(commands::on_pin_menu);
@@ -642,6 +823,13 @@ pub fn run() {
             commands::export_image,
             commands::overlay_pick_color,
             commands::file_name_example,
+            commands::find_sensitive,
+            commands::history_list,
+            commands::ui_language,
+            commands::end_scroll,
+            commands::open_history,
+            commands::history_action,
+            commands::history_clear,
             commands::get_settings,
             commands::save_settings,
             commands::pick_folder,

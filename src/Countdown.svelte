@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { closeWindow, param, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   // Rust takes the shot when its own timer runs out; closing this cancels it.
   let left = $state(Number(param("s") ?? 3));
@@ -12,9 +13,9 @@
   });
 </script>
 
-<button class="countdown" title="Cancel" onclick={closeWindow}>
+<button class="countdown" title={tr("Cancel")} onclick={closeWindow}>
   <strong>{left}</strong>
-  <span>Click to cancel</span>
+  <span>{tr("Click to cancel")}</span>
 </button>
 
 <style>

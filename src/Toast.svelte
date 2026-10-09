@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { closeWindow, invoke, isMac, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   // An empty `text` means nothing was copied and `title` says why.
   // `path` is a saved file, shown in Finder or Explorer on click.
@@ -20,13 +21,13 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="toast" class:file={toast.path} title={toast.path ? "Show in folder" : undefined} onclick={onClick}>
+<div class="toast" class:file={toast.path} title={toast.path ? tr("Show in folder") : undefined} onclick={onClick}>
   <strong>{toast.title}</strong>
   {#if toast.text}
     <p class:one-line={toast.path}>{toast.text}</p>
   {/if}
   {#if toast.path}
-    <p class="action">Click to show in {isMac ? "Finder" : "Explorer"}</p>
+    <p class="action">{tr("Click to show in {app}", { app: isMac ? "Finder" : "Explorer" })}</p>
   {/if}
 </div>
 

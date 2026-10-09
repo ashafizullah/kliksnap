@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { invoke, isMac, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   type Settings = {
     hotkey_area: string;
@@ -9,6 +10,7 @@
     hotkey_text: string;
     hotkey_last_area: string;
     hotkey_record: string;
+    hotkey_scroll: string;
     print_screen: boolean;
     save_dir: string;
     auto_copy: boolean;
@@ -19,13 +21,17 @@
     file_template: string;
     record_countdown: number;
     record_scale: number;
+    record_system_audio: boolean;
+    record_mic: boolean;
     preview_secs: number;
+    history_limit: number;
     live_selection: boolean;
     launch_at_login: boolean;
     check_updates: boolean;
     show_tray: boolean;
+    language: "auto" | "en" | "id";
   };
-  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record";
+  type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
     { field: "hotkey_area", label: "Capture area" },
@@ -34,6 +40,7 @@
     { field: "hotkey_text", label: "Copy text (OCR)" },
     { field: "hotkey_last_area", label: "Capture last area" },
     { field: "hotkey_record", label: "Record area (again to stop)" },
+    { field: "hotkey_scroll", label: "Scrolling capture" },
   ];
 
   type Tab = "general" | "capture" | "recording" | "shortcuts";
@@ -89,6 +96,12 @@
     invoke<string>("file_name_example", { template: s.file_template, format: s.image_format }).then((name) => (example = name));
   });
 
+  // Every window shows its language from when it opened: reload this one.
+  async function setLanguage() {
+    await save();
+    location.reload();
+  }
+
   async function save() {
     if (!s) return;
     try {
@@ -104,7 +117,7 @@
   const MAC_SYMBOLS: Record<string, string> = { Command: "⌘", Control: "⌃", Alt: "⌥", Shift: "⇧", CommandOrControl: "⌘" };
 
   function pretty(accelerator: string) {
-    if (!accelerator) return "Not set";
+    if (!accelerator) return tr("Not set");
     const parts = accelerator.split("+");
     if (!isMac) return parts.map((p) => (p === "CommandOrControl" ? "Ctrl" : p)).join(" + ");
     return parts.map((p) => MAC_SYMBOLS[p] ?? p).join("");
@@ -168,10 +181,14 @@
   <main>
     <header>
       <h1>KlikSnap</h1>
-      <p>Free, open-source screenshots. Lives in your {isMac ? "menu bar" : "system tray"}.</p>
+      <p>
+        {isMac
+          ? tr("Free, open-source screenshots. Lives in your menu bar.")
+          : tr("Free, open-source screenshots. Lives in your system tray.")}
+      </p>
     </header>
 
-    <div class="tabs" role="tablist" aria-label="Settings">
+    <div class="tabs" role="tablist" aria-label={tr("Settings")}>
       {#each TABS as t (t.id)}
         <button
           role="tab"
@@ -183,7 +200,7 @@
           onclick={() => selectTab(t.id)}
           onkeydown={onTabKey}
         >
-          {t.label}
+          {tr(t.label)}
         </button>
       {/each}
     </div>
@@ -191,32 +208,40 @@
     <div class="panel" id="panel" role="tabpanel" aria-labelledby="tab-{tab}">
       {#if tab === "general"}
         <section>
-          <h2>General</h2>
+          <h2>{tr("General")}</h2>
           <label class="row">
-            <span>Launch at login</span>
+            <span>{tr("Language")}</span>
+            <select bind:value={s.language} onchange={setLanguage}>
+              <option value="auto">{tr("System ({lang})", { lang: navigator.language })}</option>
+              <option value="en">English</option>
+              <option value="id">Bahasa Indonesia</option>
+            </select>
+          </label>
+          <label class="row">
+            <span>{tr("Launch at login")}</span>
             <input type="checkbox" bind:checked={s.launch_at_login} onchange={save} />
           </label>
           {#if !isMac}
             <label class="row">
-              <span>Show tray icon</span>
+              <span>{tr("Show tray icon")}</span>
               <input type="checkbox" bind:checked={s.show_tray} onchange={save} />
             </label>
             {#if !s.show_tray}
-              <p class="hint">KlikSnap keeps running on its shortcuts. Open it again from the Start menu to get back here.</p>
+              <p class="hint">{tr("KlikSnap keeps running on its shortcuts. Open it again from the Start menu to get back here.")}</p>
               <div class="row">
-                <span>Stop KlikSnap until you open it again</span>
-                <button class="secondary" onclick={() => invoke("quit")}>Quit</button>
+                <span>{tr("Stop KlikSnap until you open it again")}</span>
+                <button class="secondary" onclick={() => invoke("quit")}>{tr("Quit")}</button>
               </div>
             {/if}
           {/if}
           <label class="row">
-            <span>Check for updates automatically</span>
+            <span>{tr("Check for updates automatically")}</span>
             <input type="checkbox" bind:checked={s.check_updates} onchange={save} />
           </label>
           <div class="row">
-            <span>Version {version}</span>
+            <span>{tr("Version {v}", { v: version })}</span>
             <button class="secondary" disabled={checking} onclick={checkNow}>
-              {checking ? "Checking…" : "Check Now"}
+              {checking ? tr("Checking…") : tr("Check Now")}
             </button>
           </div>
           {#if updateStatus}
@@ -225,73 +250,95 @@
         </section>
 
         <section>
-          <h2>Save location</h2>
+          <h2>{tr("Save location")}</h2>
           <div class="row">
             <span class="path" title={s.save_dir}>{s.save_dir}</span>
-            <button class="secondary" onclick={chooseFolder}>Change…</button>
+            <button class="secondary" onclick={chooseFolder}>{tr("Change…")}</button>
           </div>
         </section>
       {:else if tab === "capture"}
         <section>
-          <h2>Selection</h2>
+          <h2>{tr("Selection")}</h2>
           <label class="row">
-            <span>Live screen while selecting</span>
+            <span>{tr("Live screen while selecting")}</span>
             <input type="checkbox" bind:checked={s.live_selection} onchange={save} />
           </label>
           <p class="hint">
             {s.live_selection
-              ? "Videos keep playing; the shot is taken when you finish selecting. Open menus may close first."
-              : "The screen freezes when you press the shortcut, so open menus and tooltips stay in the shot."}
+              ? tr("Videos keep playing; the shot is taken when you finish selecting. Open menus may close first.")
+              : tr("The screen freezes when you press the shortcut, so open menus and tooltips stay in the shot.")}
           </p>
         </section>
 
         <section>
-          <h2>After capture</h2>
+          <h2>{tr("After capture")}</h2>
           <label class="row">
-            <span>Copy to clipboard</span>
+            <span>{tr("Copy to clipboard")}</span>
             <input type="checkbox" bind:checked={s.auto_copy} onchange={save} />
           </label>
           <label class="row">
-            <span>Save to folder</span>
+            <span>{tr("Save to folder")}</span>
             <input type="checkbox" bind:checked={s.auto_save} onchange={save} />
           </label>
           <label class="row">
-            <span>Resolution</span>
+            <span>{tr("Resolution")}</span>
             <select bind:value={s.capture_scale} onchange={save}>
-              <option value={100}>Max (100%)</option>
-              <option value={75}>Medium (75%)</option>
-              <option value={50}>Low (50%)</option>
+              <option value={100}>{tr("Max (100%)")}</option>
+              <option value={75}>{tr("Medium (75%)")}</option>
+              <option value={50}>{tr("Low (50%)")}</option>
             </select>
           </label>
           {#if s.capture_scale < 100}
             <p class="hint">
-              Smaller files, less detail. {isMac ? "On a Retina display, Low matches the size things appear on screen." : ""}
-              Copy Text (OCR) always reads the full resolution.
+              {tr("Smaller files, less detail.")}
+              {isMac ? tr("On a Retina display, Low matches the size things appear on screen.") : ""}
+              {tr("Copy Text (OCR) always reads the full resolution.")}
             </p>
           {/if}
           <label class="row">
-            <span>Hide preview after</span>
+            <span>{tr("Hide preview after")}</span>
             <select bind:value={s.preview_secs} onchange={save}>
-              <option value={3}>3 seconds</option>
-              <option value={6}>6 seconds</option>
-              <option value={10}>10 seconds</option>
-              <option value={0}>Never</option>
+              <option value={3}>{tr("{n} seconds", { n: 3 })}</option>
+              <option value={6}>{tr("{n} seconds", { n: 6 })}</option>
+              <option value={10}>{tr("{n} seconds", { n: 10 })}</option>
+              <option value={0}>{tr("Never")}</option>
             </select>
           </label>
         </section>
 
         <section>
-          <h2>File</h2>
+          <h2>{tr("History")}</h2>
           <label class="row">
-            <span>Format</span>
+            <span>{tr("Keep recent captures")}</span>
+            <select bind:value={s.history_limit} onchange={save}>
+              <option value={0}>{tr("Off")}</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+          </label>
+          <div class="row">
+            <span>{tr("Find, copy or edit past captures")}</span>
+            <button class="secondary" onclick={() => invoke("open_history")}>{tr("Open History")}</button>
+          </div>
+          <p class="hint">
+            {tr("Stored only on this {device}, and searchable by the text in them.", { device: isMac ? "Mac" : "PC" })}
+          </p>
+        </section>
+
+        <section>
+          <h2>{tr("File")}</h2>
+          <label class="row">
+            <span>{tr("Format")}</span>
             <select bind:value={s.image_format} onchange={save}>
-              <option value="png">PNG (lossless)</option>
-              <option value="jpg">JPG (smaller)</option>
+              <option value="png">{tr("PNG (lossless)")}</option>
+              <option value="jpg">{tr("JPG (smaller)")}</option>
             </select>
           </label>
           {#if s.image_format === "jpg"}
             <label class="row">
-              <span>JPG quality</span>
+              <span>{tr("JPG quality")}</span>
               <span class="range">
                 <input type="range" min="40" max="100" step="5" bind:value={s.jpg_quality} onchange={save} />
                 <span class="value">{s.jpg_quality}</span>
@@ -299,62 +346,81 @@
             </label>
           {/if}
           <label class="row">
-            <span>File name</span>
+            <span>{tr("File name")}</span>
             <input class="template" type="text" spellcheck="false" bind:value={s.file_template} onchange={save} />
           </label>
           <p class="hint">
             {example}<br />
-            Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.
+            {tr("Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.")}
           </p>
         </section>
       {:else if tab === "recording"}
         <section>
-          <h2>Recording</h2>
+          <h2>{tr("Recording")}</h2>
           <label class="row">
-            <span>Countdown before recording</span>
+            <span>{tr("Countdown before recording")}</span>
             <select bind:value={s.record_countdown} onchange={save}>
-              <option value={0}>Off</option>
-              <option value={3}>3 seconds</option>
-              <option value={5}>5 seconds</option>
-              <option value={10}>10 seconds</option>
+              <option value={0}>{tr("Off")}</option>
+              <option value={3}>{tr("{n} seconds", { n: 3 })}</option>
+              <option value={5}>{tr("{n} seconds", { n: 5 })}</option>
+              <option value={10}>{tr("{n} seconds", { n: 10 })}</option>
             </select>
           </label>
           <label class="row">
-            <span>Resolution</span>
+            <span>{tr("Resolution")}</span>
             <select bind:value={s.record_scale} onchange={save}>
-              <option value={100}>Max (100%)</option>
-              <option value={75}>Medium (75%)</option>
-              <option value={50}>Low (50%)</option>
+              <option value={100}>{tr("Max (100%)")}</option>
+              <option value={75}>{tr("Medium (75%)")}</option>
+              <option value={50}>{tr("Low (50%)")}</option>
             </select>
           </label>
           <p class="hint">
             {s.record_scale < 100
-              ? `Smaller videos, less detail.${isMac ? " On a Retina display, Low records at the size things appear on screen." : ""}`
-              : "Full detail; the largest files."}
+              ? `${tr("Smaller videos, less detail.")}${isMac ? " " + tr("On a Retina display, Low records at the size things appear on screen.") : ""}`
+              : tr("Full detail; the largest files.")}
+          </p>
+        </section>
+
+        <section>
+          <h2>{tr("Sound")}</h2>
+          <label class="row">
+            <span>{tr("Record computer sound")}</span>
+            <input type="checkbox" bind:checked={s.record_system_audio} onchange={save} />
+          </label>
+          <label class="row">
+            <span>{tr("Record microphone")}</span>
+            <input type="checkbox" bind:checked={s.record_mic} onchange={save} />
+          </label>
+          <p class="hint">
+            {isMac
+              ? tr(
+                  "Computer sound needs macOS 13 or later, the microphone macOS 15. Each goes on its own track. GIFs have no sound.",
+                )
+              : tr("Both are mixed into one track. GIFs have no sound.")}
           </p>
         </section>
       {:else}
         <section>
-          <h2>Shortcuts</h2>
+          <h2>{tr("Shortcuts")}</h2>
           {#each HOTKEYS as h (h.field)}
             <div class="row">
-              <span>{h.label}</span>
+              <span>{tr(h.label)}</span>
               <button
                 class="hotkey"
                 class:recording={recording === h.field}
                 onclick={() => (recording = recording === h.field ? null : h.field)}
               >
-                {recording === h.field ? "Press keys…" : pretty(s[h.field])}
+                {recording === h.field ? tr("Press keys…") : pretty(s[h.field])}
               </button>
             </div>
           {/each}
-          <p class="hint">Click a shortcut, then press the new keys. Backspace clears it, Esc cancels.</p>
+          <p class="hint">{tr("Click a shortcut, then press the new keys. Backspace clears it, Esc cancels.")}</p>
           {#if !isMac}
             <label class="row">
-              <span>Print Screen captures an area</span>
+              <span>{tr("Print Screen captures an area")}</span>
               <input type="checkbox" bind:checked={s.print_screen} onchange={save} />
             </label>
-            <p class="hint">Replaces the Snipping Tool on the Print Screen key.</p>
+            <p class="hint">{tr("Replaces the Snipping Tool on the Print Screen key.")}</p>
           {/if}
         </section>
       {/if}
@@ -364,9 +430,9 @@
       {#if error}
         <span class="error" role="alert">{error}</span>
       {:else if saved}
-        <span class="ok">Saved</span>
+        <span class="ok">{tr("Saved")}</span>
       {:else}
-        <span>Free & open source · MIT License</span>
+        <span>{tr("Free & open source · MIT License")}</span>
       {/if}
     </footer>
   </main>

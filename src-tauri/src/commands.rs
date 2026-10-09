@@ -4,12 +4,13 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use xcap::image::RgbaImage;
 
 use crate::capture::{self, Mode, Shot};
+use crate::i18n::tr;
 use crate::settings::Settings;
 use crate::{hotkeys, output, platform, tray, ui, AppState};
 
@@ -43,6 +44,13 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
                 std::thread::spawn(|| crate::ocr::recognize(&RgbaImage::new(64, 32)));
             }
         }
+    } else if label == "scroll" {
+        // Keep the controls out of the frames being stitched.
+        let id = platform::prepare_live_overlay(&window);
+        if let Some(s) = state.scroll.lock().unwrap().as_ref() {
+            s.controls.store(id, Ordering::SeqCst);
+        }
+        platform::show_inactive(&window);
     } else if label == "recording" {
         // Keep the controls out of the recording (Windows; macOS leaves all
         // of KlikSnap's windows out).
@@ -89,13 +97,11 @@ fn keep_crosshair(window: WebviewWindow) {
 pub async fn check_updates(app: AppHandle, window: WebviewWindow) -> Result<String, String> {
     use crate::updater::Outcome;
     match crate::updater::check_and_offer(&app, Some(&window)).await {
-        Ok(Outcome::UpToDate) => Ok(format!(
-            "You're up to date: {} is the latest version.",
-            app.package_info().version
-        )),
+        Ok(Outcome::UpToDate) => Ok(tr("You're up to date: {version} is the latest version.")
+            .replace("{version}", &app.package_info().version.to_string())),
         Ok(Outcome::Offered) => Ok(String::new()),
-        Ok(Outcome::Busy) => Ok("Already checking…".into()),
-        Err(e) => Err(format!("Couldn't check for updates: {e}")),
+        Ok(Outcome::Busy) => Ok(tr("Already checking…").into()),
+        Err(e) => Err(format!("{} {e}", tr("Couldn't check for updates."))),
     }
 }
 
@@ -112,6 +118,17 @@ pub fn app_version(app: AppHandle) -> String {
 #[tauri::command]
 pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
+}
+
+/// "en" or "id": the language the windows show.
+#[tauri::command]
+pub fn ui_language() -> &'static str {
+    crate::i18n::code()
+}
+
+#[tauri::command]
+pub fn end_scroll(app: AppHandle, done: bool) {
+    crate::end_scroll(&app, done);
 }
 
 #[tauri::command]
@@ -321,7 +338,7 @@ pub async fn pin_shot(app: AppHandle, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn open_pin(app: &AppHandle, id: u32) -> Result<(), String> {
+pub(crate) fn open_pin(app: &AppHandle, id: u32) -> Result<(), String> {
     let state = app.state::<AppState>();
     let origin = state.shots.lock().unwrap().get(&id).and_then(|s| s.origin);
     let (img, bounds) = state.shot(id).ok_or("screenshot expired")?;
@@ -346,14 +363,23 @@ pub fn pin_menu(window: WebviewWindow) -> Result<(), String> {
             None::<&str>,
         )
     };
+    let opacity = Submenu::new(&window, tr("Opacity"), true).map_err(e)?;
+    for pct in [100, 80, 60, 40, 20] {
+        opacity
+            .append(&item(&format!("opacity{pct}"), &format!("{pct}%")).map_err(e)?)
+            .map_err(e)?;
+    }
     let menu = Menu::with_items(
         &window,
         &[
-            &item("copy", "Copy").map_err(e)?,
-            &item("save", "Save").map_err(e)?,
-            &item("edit", "Annotate").map_err(e)?,
+            &item("copy", tr("Copy")).map_err(e)?,
+            &item("save", tr("Save")).map_err(e)?,
+            &item("edit", tr("Annotate")).map_err(e)?,
             &PredefinedMenuItem::separator(&window).map_err(e)?,
-            &item("close", "Close").map_err(e)?,
+            &opacity,
+            &item("through", tr("Click Through")).map_err(e)?,
+            &PredefinedMenuItem::separator(&window).map_err(e)?,
+            &item("close", tr("Close")).map_err(e)?,
         ],
     )
     .map_err(e)?;
@@ -377,6 +403,22 @@ pub fn on_pin_menu(app: &AppHandle, event: MenuEvent) {
     let img = id.and_then(|id| state.shot(id).map(|s| (id, s.0)));
     let result = match (action, img) {
         ("close", _) => win.destroy().map_err(|e| e.to_string()),
+        ("through", _) => {
+            state
+                .click_through
+                .lock()
+                .unwrap()
+                .insert(label.to_string());
+            tray::refresh(app);
+            let _ = win.emit_to(label, "pin:click-through", true);
+            win.set_ignore_cursor_events(true)
+                .map_err(|e| e.to_string())
+        }
+        (a, _) if a.starts_with("opacity") => {
+            let pct: u32 = a["opacity".len()..].parse().unwrap_or(100);
+            win.emit_to(label, "pin:opacity", pct as f64 / 100.0)
+                .map_err(|e| e.to_string())
+        }
         ("copy", Some((_, img))) => output::copy(&img),
         ("save", Some((_, img))) => save_to_folder(app, &img).map(|_| ()),
         ("edit", Some((id, _))) => {
@@ -461,7 +503,7 @@ pub async fn export_image(
             output::unique_path(&dir, &s.file_name())
         }
         "saveas" => {
-            let (png, jpg) = (("PNG image", ["png"]), ("JPEG image", ["jpg"]));
+            let (png, jpg) = ((tr("PNG image"), ["png"]), (tr("JPEG image"), ["jpg"]));
             let filters = if format == output::Format::Png {
                 [png, jpg]
             } else {
@@ -517,6 +559,65 @@ fn share_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(output::unique_path(&dir, &s.file_name()))
 }
 
+/// Async: creating a window from a synchronous command deadlocks on Windows.
+#[tauri::command]
+pub async fn open_history(app: AppHandle) -> Result<(), String> {
+    ui::open_history(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn history_list(app: AppHandle) -> Vec<crate::history::Entry> {
+    crate::history::list(&app)
+}
+
+/// Copy, Edit, Pin, Save or Delete a capture from History.
+#[tauri::command]
+pub async fn history_action(app: AppHandle, id: String, action: String) -> Result<(), String> {
+    if action == "delete" {
+        return crate::history::delete(&app, &id);
+    }
+    let (entry, img) = crate::history::get(&app, &id).ok_or("capture not found")?;
+    match action.as_str() {
+        "copy" => output::copy(&img),
+        "save" => save_to_folder(&app, &img).map(|_| ()),
+        "edit" | "pin" => {
+            let bounds = capture::Bounds {
+                scale: entry.scale,
+                ..capture::bounds_at(platform::cursor_pos())?
+            };
+            let state = app.state::<AppState>();
+            let id = state.insert_shot(Shot {
+                img: std::sync::Arc::new(img),
+                bounds,
+                origin: None,
+                refs: 0,
+            });
+            if action == "pin" {
+                open_pin(&app, id)
+            } else {
+                edit_shot(app.clone(), id, state).await
+            }
+        }
+        other => Err(format!("unknown action {other}")),
+    }
+}
+
+#[tauri::command]
+pub async fn history_clear(app: AppHandle) -> Result<(), String> {
+    crate::history::trim(&app, 0)
+}
+
+/// Boxes (`x, y, w, h` in image pixels) around the sensitive text in a shot.
+#[tauri::command]
+pub async fn find_sensitive(id: u32, state: State<'_, AppState>) -> Result<Vec<[f64; 4]>, String> {
+    let (img, _) = state.shot(id).ok_or("screenshot expired")?;
+    let words = crate::ocr::words(&img)?;
+    Ok(crate::redact::find(&words)
+        .into_iter()
+        .map(|i| words[i].rect)
+        .collect())
+}
+
 #[tauri::command]
 pub fn file_name_example(template: String, format: String) -> String {
     let ext = if format == "jpg" { "jpg" } else { "png" };
@@ -564,7 +665,11 @@ pub fn save_settings(
     if settings.show_tray != old.show_tray {
         tray::set_visible(&app, settings.show_tray);
     }
+    if settings.history_limit < old.history_limit {
+        crate::history::trim(&app, settings.history_limit)?;
+    }
     crate::settings::store(&app, &settings)?;
+    crate::i18n::set(&settings.language);
     *state.settings.lock().unwrap() = settings;
     tray::refresh(&app);
     Ok(())

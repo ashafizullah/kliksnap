@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { invoke, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   const start = Date.now();
   let elapsed = $state(0);
@@ -22,10 +23,10 @@
 
 <div class="bar">
   <span class="dot" aria-hidden="true"></span>
-  <span class="clock" aria-label="Recording time">{clock}</span>
+  <span class="clock" aria-label={tr("Recording time")}>{clock}</span>
   <button onclick={stop} disabled={stopping}>
     <span class="square" aria-hidden="true"></span>
-    Stop
+    {tr("Stop")}
   </button>
 </div>
 
