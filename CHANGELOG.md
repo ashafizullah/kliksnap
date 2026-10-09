@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.3
+
+### Fixed
+
+- Recording with the microphone on macOS: KlikSnap now asks for microphone access and shows up under System Settings → Privacy & Security → Microphone. Before, macOS refused it silently and the app was missing from that list
+
 ## 0.9.2
 
 ### Improved
