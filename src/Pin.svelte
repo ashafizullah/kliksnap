@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { closeWindow, imageUrl, invoke, isMac, param, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   const id = Number(param("id"));
   const win = getCurrentWindow();
@@ -58,7 +59,7 @@
 
   function setOpacity(next: number) {
     opacity = Math.round(Math.min(1, Math.max(0.2, next)) * 100) / 100;
-    flash(`Opacity ${Math.round(opacity * 100)}%`);
+    flash(tr("Opacity {n}%", { n: Math.round(opacity * 100) }));
   }
 
   // Scroll zooms; with Alt (Option) held it fades the pin instead.
@@ -73,7 +74,10 @@
       listen<number>("pin:opacity", (e) => setOpacity(e.payload)),
       listen<boolean>("pin:click-through", (e) => {
         if (e.payload && opacity === 1) opacity = 0.6;
-        flash(e.payload ? "Clicks pass through · undo from the menu bar icon" : "Clickable again");
+        const through = isMac
+          ? "Clicks pass through · undo from the menu bar icon"
+          : "Clicks pass through · undo from the tray icon";
+        flash(tr(e.payload ? through : "Clickable again"));
       }),
     ];
     return () => off.forEach((p) => p.then((unlisten) => unlisten()));
@@ -88,7 +92,7 @@
     const cmd = isMac ? e.metaKey : e.ctrlKey;
     const key = e.key.toLowerCase();
     if (e.key === "Escape" || (cmd && key === "w")) closeWindow();
-    else if (cmd && key === "c") invoke("copy_shot", { id }).then(() => flash("Copied"), (err) => flash(String(err)));
+    else if (cmd && key === "c") invoke("copy_shot", { id }).then(() => flash(tr("Copied")), (err) => flash(String(err)));
     else if (key === "0") setZoom(1);
   }
 </script>
@@ -97,7 +101,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="pin" style:opacity={opacity} onpointerdown={onPointerDown} onwheel={onWheel} oncontextmenu={onContextMenu}>
-  <img src={imageUrl(`shot-${id}`)} alt="Pinned screenshot" draggable="false" onload={onLoad} onerror={closeWindow} />
+  <img src={imageUrl(`shot-${id}`)} alt={tr("Pinned screenshot")} draggable="false" onload={onLoad} onerror={closeWindow} />
   {#if status}
     <div class="status">{status}</div>
   {/if}

@@ -10,6 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use xcap::image::RgbaImage;
 
 use crate::capture::{self, Mode, Shot};
+use crate::i18n::tr;
 use crate::settings::Settings;
 use crate::{hotkeys, output, platform, tray, ui, AppState};
 
@@ -96,13 +97,11 @@ fn keep_crosshair(window: WebviewWindow) {
 pub async fn check_updates(app: AppHandle, window: WebviewWindow) -> Result<String, String> {
     use crate::updater::Outcome;
     match crate::updater::check_and_offer(&app, Some(&window)).await {
-        Ok(Outcome::UpToDate) => Ok(format!(
-            "You're up to date: {} is the latest version.",
-            app.package_info().version
-        )),
+        Ok(Outcome::UpToDate) => Ok(tr("You're up to date: {version} is the latest version.")
+            .replace("{version}", &app.package_info().version.to_string())),
         Ok(Outcome::Offered) => Ok(String::new()),
-        Ok(Outcome::Busy) => Ok("Already checking…".into()),
-        Err(e) => Err(format!("Couldn't check for updates: {e}")),
+        Ok(Outcome::Busy) => Ok(tr("Already checking…").into()),
+        Err(e) => Err(format!("{} {e}", tr("Couldn't check for updates."))),
     }
 }
 
@@ -119,6 +118,12 @@ pub fn app_version(app: AppHandle) -> String {
 #[tauri::command]
 pub fn toast_text(state: State<AppState>) -> crate::Toast {
     state.toast.lock().unwrap().clone()
+}
+
+/// "en" or "id": the language the windows show.
+#[tauri::command]
+pub fn ui_language() -> &'static str {
+    crate::i18n::code()
 }
 
 #[tauri::command]
@@ -358,7 +363,7 @@ pub fn pin_menu(window: WebviewWindow) -> Result<(), String> {
             None::<&str>,
         )
     };
-    let opacity = Submenu::new(&window, "Opacity", true).map_err(e)?;
+    let opacity = Submenu::new(&window, tr("Opacity"), true).map_err(e)?;
     for pct in [100, 80, 60, 40, 20] {
         opacity
             .append(&item(&format!("opacity{pct}"), &format!("{pct}%")).map_err(e)?)
@@ -367,14 +372,14 @@ pub fn pin_menu(window: WebviewWindow) -> Result<(), String> {
     let menu = Menu::with_items(
         &window,
         &[
-            &item("copy", "Copy").map_err(e)?,
-            &item("save", "Save").map_err(e)?,
-            &item("edit", "Annotate").map_err(e)?,
+            &item("copy", tr("Copy")).map_err(e)?,
+            &item("save", tr("Save")).map_err(e)?,
+            &item("edit", tr("Annotate")).map_err(e)?,
             &PredefinedMenuItem::separator(&window).map_err(e)?,
             &opacity,
-            &item("through", "Click Through").map_err(e)?,
+            &item("through", tr("Click Through")).map_err(e)?,
             &PredefinedMenuItem::separator(&window).map_err(e)?,
-            &item("close", "Close").map_err(e)?,
+            &item("close", tr("Close")).map_err(e)?,
         ],
     )
     .map_err(e)?;
@@ -498,7 +503,7 @@ pub async fn export_image(
             output::unique_path(&dir, &s.file_name())
         }
         "saveas" => {
-            let (png, jpg) = (("PNG image", ["png"]), ("JPEG image", ["jpg"]));
+            let (png, jpg) = ((tr("PNG image"), ["png"]), (tr("JPEG image"), ["jpg"]));
             let filters = if format == output::Format::Png {
                 [png, jpg]
             } else {
@@ -664,6 +669,7 @@ pub fn save_settings(
         crate::history::trim(&app, settings.history_limit)?;
     }
     crate::settings::store(&app, &settings)?;
+    crate::i18n::set(&settings.language);
     *state.settings.lock().unwrap() = settings;
     tray::refresh(&app);
     Ok(())

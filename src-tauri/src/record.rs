@@ -745,7 +745,7 @@ mod imp {
                 let thread = std::thread::spawn(move || {
                     let host = cpal::default_host();
                     let mut sources = Vec::new();
-                    let mut opened = Ok(());
+                    let mut opened: Result<(), String> = Ok(());
                     if system {
                         opened = opened.and_then(|_| {
                             sources.push(open(host.default_output_device(), true)?);
@@ -861,7 +861,7 @@ mod imp {
                     on_error,
                     None,
                 ),
-                other => return Err(format!("unsupported sound format {other}")),
+                other => return Err(format!("unsupported sound format {other:?}")),
             }
             .map_err(|e| e.to_string())?;
             stream.play().map_err(|e| e.to_string())?;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { imageUrl, invoke, param, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   type Mode = "area" | "window" | "text";
   type Rect = { x: number; y: number; w: number; h: number };
@@ -264,16 +265,16 @@
 
   <div class="hint">
     {#if mode === "text"}
-      Drag over text to copy it
+      {tr("Drag over text to copy it")}
     {:else}
-      {#if recording}<strong>Record</strong> ·{/if}
-      {#if scrolling}<strong>Scrolling capture</strong> · Select the part that scrolls ·{/if}
-      {mode === "area" ? "Drag to select" : "Click a window"} · <kbd>Space</kbd>
-      {mode === "area" ? "window mode" : "area mode"}
-      {#if mode === "area" && !recording && !scrolling}· <kbd>C</kbd> copy color{/if}
+      {#if recording}<strong>{tr("Record")}</strong> ·{/if}
+      {#if scrolling}<strong>{tr("Scrolling capture")}</strong> · {tr("Select the part that scrolls")} ·{/if}
+      {mode === "area" ? tr("Drag to select") : tr("Click a window")} · <kbd>Space</kbd>
+      {mode === "area" ? tr("window mode") : tr("area mode")}
+      {#if mode === "area" && !recording && !scrolling}· <kbd>C</kbd> {tr("copy color")}{/if}
     {/if}
-    {#if live}· Scroll works{/if}
-    · <kbd>Esc</kbd> cancel
+    {#if live}· {tr("Scroll works")}{/if}
+    · <kbd>Esc</kbd> {tr("cancel")}
   </div>
 </div>
 

@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { invoke, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   type Progress = { height: number; lost: boolean; full: boolean };
 
@@ -10,12 +11,12 @@
 
   const message = $derived(
     progress.full
-      ? "Maximum height reached"
+      ? tr("Maximum height reached")
       : progress.lost
-        ? "Too fast: scroll back up a little"
+        ? tr("Too fast: scroll back up a little")
         : progress.height
           ? `${progress.height.toLocaleString()} px`
-          : "Scroll down slowly",
+          : tr("Scroll down slowly"),
   );
 
   function end(done: boolean) {
@@ -33,8 +34,8 @@
 <div class="bar">
   <span class="dot" class:warn={progress.lost || progress.full} aria-hidden="true"></span>
   <span class="message" role="status">{message}</span>
-  <button class="cancel" onclick={() => end(false)} disabled={ending}>Cancel</button>
-  <button class="done" onclick={() => end(true)} disabled={ending}>Done</button>
+  <button class="cancel" onclick={() => end(false)} disabled={ending}>{tr("Cancel")}</button>
+  <button class="done" onclick={() => end(true)} disabled={ending}>{tr("Done")}</button>
 </div>
 
 <style>

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { closeWindow, imageUrl, invoke, isMac, ready } from "./lib/api";
+  import { tr } from "./lib/i18n";
 
   type Entry = { id: string; created: number; width: number; height: number; scale: number; text: string };
 
@@ -34,6 +35,7 @@
 
   const DONE: Record<string, string> = { copy: "Copied", save: "Saved to your folder" };
 
+
   async function act(id: string, action: "copy" | "edit" | "pin" | "save" | "delete") {
     try {
       await invoke("history_action", { id, action });
@@ -41,7 +43,7 @@
         entries = entries.filter((e) => e.id !== id);
         if (selected === id) selected = null;
       } else if (DONE[action]) {
-        flash(DONE[action]);
+        flash(tr(DONE[action]));
       }
     } catch (e) {
       flash(String(e));
@@ -67,7 +69,7 @@
     const today = new Date();
     const yesterday = new Date(today.getTime() - 86_400_000);
     const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-    const day = same(d, today) ? "Today" : same(d, yesterday) ? "Yesterday" : dayFormat.format(d);
+    const day = same(d, today) ? tr("Today") : same(d, yesterday) ? tr("Yesterday") : dayFormat.format(d);
     return `${day}, ${timeFormat.format(d)}`;
   }
 
@@ -103,10 +105,10 @@
 
 <div class="app">
   <header>
-    <input type="search" placeholder="Search text in captures" aria-label="Search" bind:value={query} spellcheck="false" />
-    <span class="count">{shown.length} of {entries.length}</span>
+    <input type="search" placeholder={tr("Search text in captures")} aria-label={tr("Search")} bind:value={query} spellcheck="false" />
+    <span class="count">{tr("{shown} of {total}", { shown: shown.length, total: entries.length })}</span>
     <button class="danger" class:confirm={confirmClear} disabled={!entries.length} onclick={clearAll}>
-      {confirmClear ? "Click again to delete all" : "Clear All"}
+      {confirmClear ? tr("Click again to delete all") : tr("Clear All")}
     </button>
   </header>
 
@@ -114,17 +116,17 @@
     {#if loaded && !entries.length}
       <div class="empty">
         {#if historyOn}
-          <p><strong>No captures yet</strong></p>
-          <p>Screenshots you take show up here, newest first.</p>
+          <p><strong>{tr("No captures yet")}</strong></p>
+          <p>{tr("Screenshots you take show up here, newest first.")}</p>
         {:else}
-          <p><strong>History is off</strong></p>
-          <p>Turn it on in Settings → Capture.</p>
+          <p><strong>{tr("History is off")}</strong></p>
+          <p>{tr("Turn it on in Settings → Capture.")}</p>
         {/if}
       </div>
     {:else if loaded && !shown.length}
-      <div class="empty"><p>No capture contains “{query.trim()}”.</p></div>
+      <div class="empty"><p>{tr("No capture contains “{query}”.", { query: query.trim() })}</p></div>
     {:else}
-      <ul class="grid" aria-label="Captures">
+      <ul class="grid" aria-label={tr("Captures")}>
         {#each shown as e (e.id)}
           <li>
             <div
@@ -132,7 +134,7 @@
               class:selected={selected === e.id}
               role="button"
               tabindex="0"
-              aria-label="Capture from {when(e.created)}"
+              aria-label={tr("Capture from {when}", { when: when(e.created) })}
               onclick={() => (selected = e.id)}
               ondblclick={() => act(e.id, "edit")}
               onkeydown={(k) => k.key === " " && (selected = e.id)}
@@ -145,14 +147,14 @@
                 <span class="muted">{e.width} × {e.height}</span>
               </div>
               <div class="actions">
-                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "copy"))}>Copy</button>
-                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "edit"))}>Edit</button>
-                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "pin"))}>Pin</button>
-                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "save"))}>Save</button>
+                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "copy"))}>{tr("Copy")}</button>
+                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "edit"))}>{tr("Edit")}</button>
+                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "pin"))}>{tr("Pin")}</button>
+                <button onclick={(ev) => (ev.stopPropagation(), act(e.id, "save"))}>{tr("Save")}</button>
                 <button
                   class="icon"
-                  title="Delete"
-                  aria-label="Delete"
+                  title={tr("Delete")}
+                  aria-label={tr("Delete")}
                   onclick={(ev) => (ev.stopPropagation(), act(e.id, "delete"))}
                 >
                   <svg viewBox="0 0 18 18"><path d="M4 5h10M7.5 5V3.5h3V5M5.5 5l.7 9.5h5.6l.7-9.5" /></svg>

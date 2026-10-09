@@ -26,6 +26,7 @@ xcap = "0.9.8"
 # JPEG export; unifies with the image crate xcap re-exports.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 gif = "0.14"
+sys-locale = "0.3"
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-updater = "2.13.2"

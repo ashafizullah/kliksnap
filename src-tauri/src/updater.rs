@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
+use crate::i18n::tr;
 use crate::AppState;
 
 const STARTUP_DELAY: Duration = Duration::from_secs(10);
@@ -136,16 +137,18 @@ async fn offer(app: &AppHandle, update: Update, parent: Option<&WebviewWindow>) 
         notes
     };
     let message = format!(
-        "KlikSnap {} is available. You have {}.\n\n{notes}",
-        update.version, update.current_version
+        "{}\n\n{notes}",
+        tr("KlikSnap {new} is available. You have {old}.")
+            .replace("{new}", &update.version)
+            .replace("{old}", &update.current_version)
     );
     let mut dialog = app
         .dialog()
         .message(message.trim_end())
-        .title("Update available")
+        .title(tr("Update available"))
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Install and Restart".into(),
-            "Later".into(),
+            tr("Install and Restart").into(),
+            tr("Later").into(),
         ));
     if let Some(parent) = parent {
         dialog = dialog.parent(parent);
@@ -156,7 +159,7 @@ async fn offer(app: &AppHandle, update: Update, parent: Option<&WebviewWindow>) 
             Err(e) => notify(
                 app,
                 MessageDialogKind::Error,
-                format!("The update could not be installed.\n\n{e}"),
+                format!("{}\n\n{e}", tr("The update could not be installed.")),
                 parent,
             ),
         }
@@ -170,16 +173,14 @@ pub async fn check(app: AppHandle, manual: bool) {
         Ok(Outcome::UpToDate) if manual => notify(
             &app,
             MessageDialogKind::Info,
-            format!(
-                "You're up to date. KlikSnap {} is the latest version.",
-                app.package_info().version
-            ),
+            tr("You're up to date. KlikSnap {version} is the latest version.")
+                .replace("{version}", &app.package_info().version.to_string()),
             None,
         ),
         Err(e) if manual => notify(
             &app,
             MessageDialogKind::Error,
-            format!("Couldn't check for updates.\n\n{e}"),
+            format!("{}\n\n{e}", tr("Couldn't check for updates.")),
             None,
         ),
         _ => {}

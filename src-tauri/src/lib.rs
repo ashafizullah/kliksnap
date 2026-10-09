@@ -5,6 +5,7 @@ mod commands;
 mod gif_writer;
 mod history;
 mod hotkeys;
+mod i18n;
 mod ocr;
 mod output;
 mod platform;
@@ -258,7 +259,7 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
             std::thread::sleep(Duration::from_millis(150));
             if let Err(e) = scroll_capture(&app, f.bounds, rect) {
                 let toast = Toast {
-                    title: format!("Scrolling capture failed: {e}"),
+                    title: format!("{}: {e}", i18n::tr("Scrolling capture failed")),
                     ..Default::default()
                 };
                 let _ = show_toast(&app, toast, &f.bounds);
@@ -322,13 +323,13 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
         Vec::new()
     });
     let (title, result) = if codes.is_empty() {
-        ("Text copied", ocr::recognize(img))
+        (i18n::tr("Text copied"), ocr::recognize(img))
     } else {
-        ("QR code copied", Ok(codes.join("\n")))
+        (i18n::tr("QR code copied"), Ok(codes.join("\n")))
     };
     let toast = match result {
         Ok(text) if text.trim().is_empty() => Toast {
-            title: "No text found".into(),
+            title: i18n::tr("No text found").into(),
             ..Default::default()
         },
         Ok(text) => {
@@ -342,7 +343,7 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
             }
         }
         Err(e) => Toast {
-            title: format!("Text recognition failed: {e}"),
+            title: format!("{}: {e}", i18n::tr("Text recognition failed")),
             ..Default::default()
         },
     };
@@ -369,7 +370,7 @@ pub(crate) fn pick_color(app: &AppHandle, index: usize, hex: &str) -> Result<(),
         .and_then(|mut c| c.set_text(hex.clone()))
         .map_err(|e| e.to_string())?;
     let toast = Toast {
-        title: "Color copied".into(),
+        title: i18n::tr("Color copied").into(),
         text: hex,
         ..Default::default()
     };
@@ -428,7 +429,7 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
         }
         Err(e) => {
             let toast = Toast {
-                title: format!("Recording failed: {e}"),
+                title: format!("{}: {e}", i18n::tr("Recording failed")),
                 ..Default::default()
             };
             let _ = show_toast(app, toast, &bounds);
@@ -518,9 +519,9 @@ pub fn stop_recording(app: &AppHandle) {
         let toast = match rec.recorder.stop() {
             Ok(()) => Toast {
                 title: if record::is_gif(&rec.path) {
-                    "GIF saved".into()
+                    i18n::tr("GIF saved").into()
                 } else {
-                    "Recording saved".into()
+                    i18n::tr("Recording saved").into()
                 },
                 text: rec
                     .path
@@ -530,7 +531,7 @@ pub fn stop_recording(app: &AppHandle) {
                 path: rec.path.display().to_string(),
             },
             Err(e) => Toast {
-                title: format!("Recording failed: {e}"),
+                title: format!("{}: {e}", i18n::tr("Recording failed")),
                 ..Default::default()
             },
         };
@@ -657,7 +658,7 @@ pub fn pin_clipboard(app: &AppHandle) {
         .and_then(|i| RgbaImage::from_raw(i.width as u32, i.height as u32, i.bytes.into_owned()));
     let Some(img) = img else {
         let toast = Toast {
-            title: "No image on the clipboard".into(),
+            title: i18n::tr("No image on the clipboard").into(),
             ..Default::default()
         };
         let _ = show_toast(app, toast, &bounds);
@@ -782,6 +783,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let (s, first_run) = settings::load(app.handle());
+            i18n::set(&s.language);
             app.manage(AppState::new(s.clone()));
             tray::create(app.handle())?;
             app.on_menu_event(commands::on_pin_menu);
@@ -823,6 +825,7 @@ pub fn run() {
             commands::file_name_example,
             commands::find_sensitive,
             commands::history_list,
+            commands::ui_language,
             commands::end_scroll,
             commands::open_history,
             commands::history_action,

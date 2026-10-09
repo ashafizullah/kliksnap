@@ -55,6 +55,8 @@ pub struct Settings {
     /// Windows: hiding the tray icon keeps KlikSnap running on its shortcuts;
     /// launching it again opens Settings.
     pub show_tray: bool,
+    /// "auto" (the system's language), "en" or "id".
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -85,6 +87,7 @@ impl Default for Settings {
             launch_at_login: false,
             check_updates: true,
             show_tray: true,
+            language: "auto".into(),
         }
     }
 }
