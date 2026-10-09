@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pin",
-  "description": "Pins move and resize themselves.",
-  "windows": ["pin-*"],
+  "description": "Pins move and resize themselves; the update window grows to show all the notes.",
+  "windows": ["pin-*", "update"],
   "permissions": ["core:window:allow-start-dragging", "core:window:allow-set-size"]
 }

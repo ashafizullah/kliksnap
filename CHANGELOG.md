@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.2
+
+### Improved
+
+- Update offers open in their own window instead of a system dialog, so long release notes are no longer cut off: *Read more* shows them all, with a link to the full notes on GitHub, and installing shows the download's progress
+
 ## 0.9.1
 
 ### Fixes

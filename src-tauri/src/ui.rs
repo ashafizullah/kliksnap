@@ -463,6 +463,23 @@ pub fn open_editor(
     Ok(label)
 }
 
+/// The update offer, replacing an open one.
+pub fn open_update(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(old) = app.get_webview_window("update") {
+        old.destroy()?;
+    }
+    WebviewWindowBuilder::new(app, "update", WebviewUrl::App("update.html".into()))
+        .title("KlikSnap")
+        .inner_size(480.0, 360.0)
+        .min_inner_size(400.0, 300.0)
+        .maximizable(false)
+        .minimizable(false)
+        .center()
+        .visible(false)
+        .build()?;
+    Ok(())
+}
+
 pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("history") {
         win.show()?;
