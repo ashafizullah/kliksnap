@@ -5,6 +5,7 @@ mod ocr;
 mod output;
 mod platform;
 mod record;
+mod redact;
 mod settings;
 mod tray;
 mod ui;
@@ -693,6 +694,7 @@ pub fn run() {
             commands::export_image,
             commands::overlay_pick_color,
             commands::file_name_example,
+            commands::find_sensitive,
             commands::get_settings,
             commands::save_settings,
             commands::pick_folder,

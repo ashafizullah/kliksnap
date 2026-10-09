@@ -542,6 +542,17 @@ fn share_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(output::unique_path(&dir, &s.file_name()))
 }
 
+/// Boxes (`x, y, w, h` in image pixels) around the sensitive text in a shot.
+#[tauri::command]
+pub async fn find_sensitive(id: u32, state: State<'_, AppState>) -> Result<Vec<[f64; 4]>, String> {
+    let (img, _) = state.shot(id).ok_or("screenshot expired")?;
+    let words = crate::ocr::words(&img)?;
+    Ok(crate::redact::find(&words)
+        .into_iter()
+        .map(|i| words[i].rect)
+        .collect())
+}
+
 #[tauri::command]
 pub fn file_name_example(template: String, format: String) -> String {
     let ext = if format == "jpg" { "jpg" } else { "png" };

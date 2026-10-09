@@ -130,6 +130,37 @@
     if (scene.shapes.length || scene.crop) commit({ ...scene, shapes: [], crop: null });
   }
 
+  let redacting = $state(false);
+
+  /** Pixelates the email addresses, numbers, keys and passwords the OCR finds. */
+  async function autoRedact() {
+    if (redacting) return;
+    redacting = true;
+    try {
+      const boxes = await invoke<[number, number, number, number][]>("find_sensitive", { id });
+      if (!boxes.length) {
+        flash("Nothing sensitive found");
+        return;
+      }
+      const pad = 2 * scale;
+      const shapes: Shape[] = boxes.map(([x, y, w, h]) => ({
+        kind: "pixelate",
+        x1: x - pad,
+        y1: y - pad,
+        x2: x + w + pad,
+        y2: y + h + pad,
+        color,
+        size: sizes.pixelate,
+      }));
+      commit({ ...scene, shapes: [...scene.shapes, ...shapes] });
+      flash(`Hid ${boxes.length} item${boxes.length === 1 ? "" : "s"}. Check the result, OCR can miss things`);
+    } catch (e) {
+      flash(`Redact failed: ${e}`);
+    } finally {
+      redacting = false;
+    }
+  }
+
   function setBackdrop(change: Partial<Backdrop> | null) {
     const next = change && { ...lastBackdrop, ...scene.backdrop, ...change };
     if (next) lastBackdrop = next;
@@ -432,6 +463,18 @@
           <span class="value">–</span>
         {/if}
       </label>
+    </div>
+
+    <div class="group">
+      <button
+        class="icon"
+        title="Hide emails, numbers, keys and passwords (OCR)"
+        aria-label="Auto redact"
+        disabled={redacting}
+        onclick={autoRedact}
+      >
+        <svg viewBox="0 0 18 18"><path d="M2 9s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM3 15L15 3" /></svg>
+      </button>
     </div>
 
     <div class="group backdrop-group">
