@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::http::{header, Response};
-use tauri::{AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::Shortcut;
 use xcap::image::RgbaImage;
 
@@ -48,6 +48,8 @@ pub struct AppState {
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
     toast: Mutex<Toast>,
     recording: Mutex<Option<Recording>>,
+    /// Pins that let clicks through to the windows below, by window label.
+    click_through: Mutex<std::collections::HashSet<String>>,
 }
 
 struct Recording {
@@ -85,6 +87,7 @@ impl AppState {
             hotkeys: Mutex::default(),
             toast: Mutex::default(),
             recording: Mutex::default(),
+            click_through: Mutex::default(),
         }
     }
 
@@ -519,6 +522,51 @@ fn finish_shot(
     Ok(())
 }
 
+/// Pins the image on the clipboard, centered on the screen under the cursor.
+pub fn pin_clipboard(app: &AppHandle) {
+    let bounds = match capture::bounds_at(platform::cursor_pos()) {
+        Ok(b) => b,
+        Err(e) => return eprintln!("pin clipboard: {e}"),
+    };
+    let img = arboard::Clipboard::new()
+        .and_then(|mut c| c.get_image())
+        .ok();
+    let img = img
+        .and_then(|i| RgbaImage::from_raw(i.width as u32, i.height as u32, i.bytes.into_owned()));
+    let Some(img) = img else {
+        let toast = Toast {
+            title: "No image on the clipboard".into(),
+            ..Default::default()
+        };
+        let _ = show_toast(app, toast, &bounds);
+        return;
+    };
+    let id = app.state::<AppState>().insert_shot(Shot {
+        img: Arc::new(img),
+        bounds,
+        origin: None,
+        refs: 0,
+    });
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = commands::open_pin(&app, id) {
+            eprintln!("pin clipboard: {e}");
+        }
+    });
+}
+
+/// Makes every click-through pin take clicks again.
+pub fn release_click_through(app: &AppHandle) {
+    let labels = std::mem::take(&mut *app.state::<AppState>().click_through.lock().unwrap());
+    for label in labels {
+        if let Some(win) = app.get_webview_window(&label) {
+            let _ = win.set_ignore_cursor_events(false);
+            let _ = win.emit_to(&label, "pin:click-through", false);
+        }
+    }
+    tray::refresh(app);
+}
+
 /// Serves captures to the webviews as `ks://localhost/<name>`.
 fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     let state = app.state::<AppState>();
@@ -559,6 +607,9 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
     } else if label.starts_with("editor-") || label.starts_with("pin-") {
         if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
+        }
+        if state.click_through.lock().unwrap().remove(label) {
+            tray::refresh(app);
         }
     } else if label.starts_with("overlay-")
         && ui::overlays(app).iter().all(|w| w.label() == label)

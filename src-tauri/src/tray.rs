@@ -33,7 +33,8 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             ],
         );
     }
-    Menu::with_items(
+    let pins_through = !state.click_through.lock().unwrap().is_empty();
+    let menu = Menu::with_items(
         app,
         &[
             &item(app, "area", "Capture Area", &s.hotkey_area)?,
@@ -46,11 +47,21 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item(app, "record", "Record Area", &s.hotkey_record)?,
             &item(app, "record_screen", "Record Screen", "")?,
             &PredefinedMenuItem::separator(app)?,
+            &item(app, "pin_clipboard", "Pin Clipboard Image", "")?,
+            &PredefinedMenuItem::separator(app)?,
             &item(app, "settings", "Settings…", "")?,
             &item(app, "update", "Check for Updates…", "")?,
             &item(app, "quit", "Quit KlikSnap", "")?,
         ],
-    )
+    )?;
+    if pins_through {
+        // Click-through pins take no clicks, so this is the way to reach them again.
+        menu.insert(
+            &item(app, "release_pins", "Make Pins Clickable Again", "")?,
+            11,
+        )?;
+    }
+    Ok(menu)
 }
 
 const DELAYS: [u32; 3] = [3, 5, 10];
@@ -106,6 +117,8 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "record" => crate::start_capture(app, Mode::Record),
             "record_screen" => crate::start_capture(app, Mode::RecordScreen),
             "stop_record" => crate::stop_recording(app),
+            "pin_clipboard" => crate::pin_clipboard(app),
+            "release_pins" => crate::release_click_through(app),
             "settings" => {
                 let _ = crate::ui::open_settings(app);
             }

@@ -370,6 +370,9 @@ pub fn open_pin(
         .title("KlikSnap")
         .decorations(false)
         .resizable(false)
+        // Transparent, so the pin can fade to let the screen below show through.
+        .transparent(true)
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .accept_first_mouse(true)

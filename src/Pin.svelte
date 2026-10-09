@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { closeWindow, imageUrl, invoke, isMac, param, ready } from "./lib/api";
 
@@ -11,13 +13,14 @@
   let zoom = 1;
   let shown = false;
   let lastDown = 0;
+  let opacity = $state(1);
   let status = $state("");
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
   function flash(text: string) {
     status = text;
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => (status = ""), 900);
+    statusTimer = setTimeout(() => (status = ""), text.length > 20 ? 2500 : 900);
   }
 
   async function onLoad(e: Event) {
@@ -53,10 +56,28 @@
     flash(`${Math.round(zoom * 100)}%`);
   }
 
+  function setOpacity(next: number) {
+    opacity = Math.round(Math.min(1, Math.max(0.2, next)) * 100) / 100;
+    flash(`Opacity ${Math.round(opacity * 100)}%`);
+  }
+
+  // Scroll zooms; with Alt (Option) held it fades the pin instead.
   function onWheel(e: WheelEvent) {
     e.preventDefault();
-    setZoom(zoom * Math.exp(-e.deltaY * 0.002));
+    if (e.altKey) setOpacity(opacity - Math.sign(e.deltaY) * 0.05);
+    else setZoom(zoom * Math.exp(-e.deltaY * 0.002));
   }
+
+  onMount(() => {
+    const off = [
+      listen<number>("pin:opacity", (e) => setOpacity(e.payload)),
+      listen<boolean>("pin:click-through", (e) => {
+        if (e.payload && opacity === 1) opacity = 0.6;
+        flash(e.payload ? "Clicks pass through · undo from the menu bar icon" : "Clickable again");
+      }),
+    ];
+    return () => off.forEach((p) => p.then((unlisten) => unlisten()));
+  });
 
   function onContextMenu(e: MouseEvent) {
     e.preventDefault();
@@ -75,7 +96,7 @@
 <svelte:window onkeydown={onKeyDown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pin" onpointerdown={onPointerDown} onwheel={onWheel} oncontextmenu={onContextMenu}>
+<div class="pin" style:opacity={opacity} onpointerdown={onPointerDown} onwheel={onWheel} oncontextmenu={onContextMenu}>
   <img src={imageUrl(`shot-${id}`)} alt="Pinned screenshot" draggable="false" onload={onLoad} onerror={closeWindow} />
   {#if status}
     <div class="status">{status}</div>
@@ -83,8 +104,9 @@
 </div>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #111;
+    background: transparent;
   }
   .pin {
     position: fixed;

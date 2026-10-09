@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use xcap::image::RgbaImage;
 
@@ -321,7 +321,7 @@ pub async fn pin_shot(app: AppHandle, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn open_pin(app: &AppHandle, id: u32) -> Result<(), String> {
+pub(crate) fn open_pin(app: &AppHandle, id: u32) -> Result<(), String> {
     let state = app.state::<AppState>();
     let origin = state.shots.lock().unwrap().get(&id).and_then(|s| s.origin);
     let (img, bounds) = state.shot(id).ok_or("screenshot expired")?;
@@ -346,12 +346,21 @@ pub fn pin_menu(window: WebviewWindow) -> Result<(), String> {
             None::<&str>,
         )
     };
+    let opacity = Submenu::new(&window, "Opacity", true).map_err(e)?;
+    for pct in [100, 80, 60, 40, 20] {
+        opacity
+            .append(&item(&format!("opacity{pct}"), &format!("{pct}%")).map_err(e)?)
+            .map_err(e)?;
+    }
     let menu = Menu::with_items(
         &window,
         &[
             &item("copy", "Copy").map_err(e)?,
             &item("save", "Save").map_err(e)?,
             &item("edit", "Annotate").map_err(e)?,
+            &PredefinedMenuItem::separator(&window).map_err(e)?,
+            &opacity,
+            &item("through", "Click Through").map_err(e)?,
             &PredefinedMenuItem::separator(&window).map_err(e)?,
             &item("close", "Close").map_err(e)?,
         ],
@@ -377,6 +386,22 @@ pub fn on_pin_menu(app: &AppHandle, event: MenuEvent) {
     let img = id.and_then(|id| state.shot(id).map(|s| (id, s.0)));
     let result = match (action, img) {
         ("close", _) => win.destroy().map_err(|e| e.to_string()),
+        ("through", _) => {
+            state
+                .click_through
+                .lock()
+                .unwrap()
+                .insert(label.to_string());
+            tray::refresh(app);
+            let _ = win.emit_to(label, "pin:click-through", true);
+            win.set_ignore_cursor_events(true)
+                .map_err(|e| e.to_string())
+        }
+        (a, _) if a.starts_with("opacity") => {
+            let pct: u32 = a["opacity".len()..].parse().unwrap_or(100);
+            win.emit_to(label, "pin:opacity", pct as f64 / 100.0)
+                .map_err(|e| e.to_string())
+        }
         ("copy", Some((_, img))) => output::copy(&img),
         ("save", Some((_, img))) => save_to_folder(app, &img).map(|_| ()),
         ("edit", Some((id, _))) => {
