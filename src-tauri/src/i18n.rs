@@ -80,6 +80,21 @@ const ID: &[(&str, &str)] = &[
     ("GIF saved", "GIF disimpan"),
     ("Scrolling capture failed", "Tangkapan gulir gagal"),
     ("No image on the clipboard", "Tidak ada gambar di clipboard"),
+    ("Recording without the microphone", "Merekam tanpa mikrofon"),
+    (
+        "Allow KlikSnap in System Settings → Privacy & Security → Microphone.",
+        "Izinkan KlikSnap di Pengaturan Sistem → Privasi & Keamanan → Mikrofon.",
+    ),
+    ("Recording without sound", "Merekam tanpa suara"),
+    (
+        "The sound couldn't be captured; the video is still recorded.",
+        "Suara tidak bisa direkam; videonya tetap direkam.",
+    ),
+    ("Screen Recording isn't allowed", "Perekaman Layar tidak diizinkan"),
+    (
+        "Turn KlikSnap on in Privacy & Security → Screen Recording, or remove it (−) and add it again.",
+        "Nyalakan KlikSnap di Privasi & Keamanan → Perekaman Layar, atau hapus (−) lalu tambahkan lagi.",
+    ),
     // Save dialog
     ("PNG image", "Gambar PNG"),
     ("JPEG image", "Gambar JPEG"),

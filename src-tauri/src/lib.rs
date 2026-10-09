@@ -416,7 +416,7 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
             record::start(&bounds, rect, settings.record_scale, &path, audio)
         });
     match started {
-        Ok(recorder) => {
+        Ok((recorder, warning)) => {
             *state.recording.lock().unwrap() = Some(Recording {
                 recorder,
                 path,
@@ -426,6 +426,33 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 eprintln!("recording controls: {e}");
             }
             tray::refresh(app);
+            let warning = warning.map(|w| match w {
+                record::SoundWarning::MicDenied => (
+                    i18n::tr("Recording without the microphone"),
+                    i18n::tr(MIC_SETTINGS),
+                ),
+                record::SoundWarning::NoSound => (
+                    i18n::tr("Recording without sound"),
+                    i18n::tr("The sound couldn't be captured; the video is still recorded."),
+                ),
+            });
+            if let Some((title, text)) = warning {
+                let toast = Toast {
+                    title: title.into(),
+                    text: text.into(),
+                    ..Default::default()
+                };
+                let _ = show_toast(app, toast, &bounds);
+            }
+        }
+        Err(e) if e == record::DECLINED => {
+            let toast = Toast {
+                title: i18n::tr("Screen Recording isn't allowed").into(),
+                text: i18n::tr(SCREEN_SETTINGS).into(),
+                ..Default::default()
+            };
+            let _ = show_toast(app, toast, &bounds);
+            platform::request_screen_permission();
         }
         Err(e) => {
             let toast = Toast {
@@ -504,6 +531,10 @@ pub fn end_scroll(app: &AppHandle, done: bool) {
         s.stop.store(code, Ordering::SeqCst);
     }
 }
+
+const MIC_SETTINGS: &str = "Allow KlikSnap in System Settings → Privacy & Security → Microphone.";
+const SCREEN_SETTINGS: &str =
+    "Turn KlikSnap on in Privacy & Security → Screen Recording, or remove it (−) and add it again.";
 
 /// Stops the recording, finishes the file and says where it went.
 pub fn stop_recording(app: &AppHandle) {

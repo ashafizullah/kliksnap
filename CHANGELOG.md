@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.1
+
+### Fixes
+
+- Recording no longer fails when the microphone isn't allowed: KlikSnap asks for it the first time, and records without it (saying so) if it's refused. Sound that can't be captured is left out instead of stopping the recording
+- When macOS refuses screen recording, the notice says how to fix it and opens the right System Settings pane
+
 ## 0.9.0
 
 ### New

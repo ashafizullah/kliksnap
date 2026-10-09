@@ -21,15 +21,30 @@ pub struct Audio {
     pub mic: bool,
 }
 
+/// The start error when macOS refused screen capture (Screen Recording off,
+/// or granted to an older build of KlikSnap).
+pub const DECLINED: &str = "screen recording isn't allowed";
+
+/// Why a recording runs without the sound asked for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SoundWarning {
+    /// The microphone isn't allowed (macOS privacy settings).
+    MicDenied,
+    /// The sound couldn't be captured; the video is recorded without it.
+    NoSound,
+}
+
 /// Starts recording `rect` (fractions of monitor `b`) into an MP4 at `path`,
-/// or a GIF if the path ends in `.gif`, at `percent` of the screen's resolution.
+/// or a GIF if the path ends in `.gif`, at `percent` of the screen's
+/// resolution. Sound that can't be captured is left out rather than failing
+/// the recording; the warning says so.
 pub fn start(
     b: &Bounds,
     rect: [f64; 4],
     percent: u32,
     path: &Path,
     audio: Audio,
-) -> Result<Recorder, String> {
+) -> Result<(Recorder, Option<SoundWarning>), String> {
     let mut r = region(b, rect, percent);
     let audio = if is_gif(path) {
         let (w, h) = crate::gif_writer::fit(r.px_w, r.px_h);
@@ -39,7 +54,38 @@ pub fn start(
     } else {
         audio
     };
-    imp::Recorder::start(b, r, path, audio)
+    let mut warning = None;
+    let mut audio = audio;
+    if audio.mic && !imp::microphone_allowed() {
+        audio.mic = false;
+        warning = Some(SoundWarning::MicDenied);
+    }
+    match imp::Recorder::start(b, r, path, audio) {
+        Ok(rec) => Ok((rec, warning)),
+        Err(e) if e != DECLINED && (audio.system || audio.mic) => {
+            eprintln!("recording with sound: {e}");
+            let _ = std::fs::remove_file(path);
+            let rec = imp::Recorder::start(b, r, path, Audio::default())?;
+            Ok((rec, Some(warning.unwrap_or(SoundWarning::NoSound))))
+        }
+        // macOS also declines the whole stream when only the microphone is
+        // refused: try once more without sound before blaming the screen.
+        Err(e) if audio.system || audio.mic => {
+            let _ = std::fs::remove_file(path);
+            match imp::Recorder::start(b, r, path, Audio::default()) {
+                Ok(rec) => {
+                    let w = if audio.mic {
+                        SoundWarning::MicDenied
+                    } else {
+                        SoundWarning::NoSound
+                    };
+                    Ok((rec, Some(w)))
+                }
+                Err(_) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub fn is_gif(path: &Path) -> bool {
@@ -293,7 +339,39 @@ mod imp {
     }
 
     fn ns_error(e: *mut NSError) -> Option<String> {
-        unsafe { e.as_ref() }.map(|e| e.localizedDescription().to_string())
+        unsafe { e.as_ref() }.map(|e| {
+            // SCStreamErrorUserDeclined: macOS refused the capture.
+            if e.code() == -3801 {
+                super::DECLINED.to_string()
+            } else {
+                e.localizedDescription().to_string()
+            }
+        })
+    }
+
+    /// Whether KlikSnap may use the microphone, asking the first time.
+    /// Blocks until the user answers.
+    pub fn microphone_allowed() -> bool {
+        use objc2::runtime::AnyClass;
+        const NOT_DETERMINED: isize = 0;
+        const AUTHORIZED: isize = 3;
+        let (Some(class), Some(media)) = (AnyClass::get(c"AVCaptureDevice"), unsafe {
+            AVMediaTypeAudio
+        }) else {
+            return false;
+        };
+        let status: isize = unsafe { msg_send![class, authorizationStatusForMediaType: media] };
+        if status != NOT_DETERMINED {
+            return status == AUTHORIZED;
+        }
+        let (tx, rx) = mpsc::channel();
+        let done = RcBlock::new(move |granted: Bool| {
+            let _ = tx.send(granted.as_bool());
+        });
+        let _: () = unsafe {
+            msg_send![class, requestAccessForMediaType: media, completionHandler: &*done]
+        };
+        rx.recv_timeout(Duration::from_secs(120)).unwrap_or(false)
     }
 
     impl Recorder {
@@ -709,6 +787,11 @@ mod imp {
         sound: Option<sound::Sound>,
     }
 
+    /// Windows asks for nothing up front; a blocked microphone fails to open.
+    pub fn microphone_allowed() -> bool {
+        true
+    }
+
     /// Captures the system's sound (WASAPI loopback) and the microphone,
     /// mixed into one track.
     mod sound {
@@ -959,6 +1042,10 @@ mod imp {
 
     pub struct Recorder;
 
+    pub fn microphone_allowed() -> bool {
+        false
+    }
+
     impl Recorder {
         pub fn start(
             _b: &Bounds,
@@ -1027,7 +1114,8 @@ mod tests {
         let path = std::env::temp_dir().join("kliksnap-record-test.mp4");
         for percent in [100, 50] {
             let _ = std::fs::remove_file(&path);
-            let rec = start(&b, [0.0, 0.0, 0.5, 0.5], percent, &path, Audio::default()).unwrap();
+            let (rec, _) =
+                start(&b, [0.0, 0.0, 0.5, 0.5], percent, &path, Audio::default()).unwrap();
             std::thread::sleep(std::time::Duration::from_secs(2));
             rec.stop().unwrap();
             let len = std::fs::metadata(&path).unwrap().len();
@@ -1046,7 +1134,8 @@ mod tests {
             system: true,
             mic: false,
         };
-        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio).unwrap();
+        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio).unwrap();
+        assert_eq!(warning, None);
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
         assert!(std::fs::metadata(&path).unwrap().len() > 1000);
@@ -1059,7 +1148,7 @@ mod tests {
         let b = crate::capture::bounds_at((10, 10)).unwrap();
         let path = std::env::temp_dir().join("kliksnap-record-test.gif");
         let _ = std::fs::remove_file(&path);
-        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path, Audio::default()).unwrap();
+        let (rec, _) = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path, Audio::default()).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
         let len = std::fs::metadata(&path).unwrap().len();
