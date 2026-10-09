@@ -1,4 +1,4 @@
-import { FONTS, badgeText, fontCss, normalize, type Rect, type Scene, type Shape } from "./shapes";
+import { FILLS, badgeText, fontCss, normalize, type Backdrop, type Rect, type Scene, type Shape } from "./shapes";
 
 let scratch: HTMLCanvasElement | null = null;
 
@@ -14,6 +14,31 @@ function pixelate(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rec
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(scratch, 0, 0, bw, bh, r.x, r.y, r.w, r.h);
   ctx.imageSmoothingEnabled = true;
+}
+
+function blur(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rect, radius: number) {
+  if (r.w < 1 || r.h < 1) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(r.x, r.y, r.w, r.h);
+  ctx.clip();
+  ctx.filter = `blur(${radius}px)`;
+  // Sample a margin around the region too, so its edges don't fade to transparent.
+  const m = radius * 2;
+  ctx.drawImage(base, r.x - m, r.y - m, r.w + 2 * m, r.h + 2 * m, r.x - m, r.y - m, r.w + 2 * m, r.h + 2 * m);
+  ctx.restore();
+}
+
+/** Smooths the stroke by curving through the midpoints between samples. */
+function pen(ctx: CanvasRenderingContext2D, pts: number[]) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0], pts[1]);
+  if (pts.length === 2) ctx.lineTo(pts[0] + 0.01, pts[1]);
+  for (let i = 2; i < pts.length - 2; i += 2) {
+    ctx.quadraticCurveTo(pts[i], pts[i + 1], (pts[i] + pts[i + 2]) / 2, (pts[i + 1] + pts[i + 3]) / 2);
+  }
+  if (pts.length > 2) ctx.lineTo(pts[pts.length - 2], pts[pts.length - 1]);
+  ctx.stroke();
 }
 
 function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number) {
@@ -46,6 +71,8 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
 
   if (s.kind === "pixelate") {
     pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(2, s.size * scale));
+  } else if (s.kind === "blur") {
+    blur(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(1, s.size * scale));
   } else if (s.kind === "highlight") {
     const r = normalize(s.x1, s.y1, s.x2, s.y2);
     ctx.globalCompositeOperation = "multiply";
@@ -72,6 +99,8 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
       ctx.textBaseline = "middle";
       // Digits sit a little high when centered on their em box.
       ctx.fillText(String(s.n), s.x, s.y + r * 0.06);
+    } else if (s.kind === "pen") {
+      pen(ctx, s.points);
     } else if (s.kind === "arrow") {
       arrow(ctx, s.x1, s.y1, s.x2, s.y2, width);
     } else if (s.kind === "line") {
@@ -122,7 +151,40 @@ export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: n
   ctx.restore();
 }
 
-/** Renders the final image (annotations applied, crop honored) as RGBA bytes. */
+/** Draws `image` centered on the backdrop, which fills the whole canvas. */
+function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w: number, h: number, b: Backdrop, scale: number) {
+  const pad = Math.round(b.padding * scale);
+  const radius = b.radius * scale;
+  const { width, height } = ctx.canvas;
+  const stops = FILLS[b.fill].stops;
+  if (stops.length === 1) {
+    ctx.fillStyle = stops[0];
+    ctx.fillRect(0, 0, width, height);
+  } else if (stops.length > 1) {
+    // 135deg, like the CSS preview: top left to bottom right.
+    const g = ctx.createLinearGradient(0, 0, width, height);
+    stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, width, height);
+  }
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(pad, pad, w, h, radius);
+  if (b.shadow) {
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+    ctx.shadowBlur = Math.max(8, pad * 0.5);
+    ctx.shadowOffsetY = Math.max(2, pad * 0.12);
+    ctx.fillStyle = "#000";
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.clip();
+  ctx.drawImage(image, pad, pad);
+  ctx.restore();
+}
+
+/** Renders the final image (annotations applied, crop and backdrop honored) as RGBA bytes. */
 export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number) {
   const full = { x: 0, y: 0, w: base.naturalWidth, h: base.naturalHeight };
   const c = scene.crop ?? full;
@@ -138,6 +200,16 @@ export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.translate(-r.x, -r.y);
   drawScene(ctx, base, scene, scale);
-  const data = ctx.getImageData(0, 0, r.w, r.h).data;
-  return { bytes: new Uint8Array(data.buffer), width: r.w, height: r.h };
+  if (!scene.backdrop) {
+    const data = ctx.getImageData(0, 0, r.w, r.h).data;
+    return { bytes: new Uint8Array(data.buffer), width: r.w, height: r.h };
+  }
+  const pad = Math.round(scene.backdrop.padding * scale);
+  const out = document.createElement("canvas");
+  out.width = r.w + 2 * pad;
+  out.height = r.h + 2 * pad;
+  const octx = out.getContext("2d", { willReadFrequently: true })!;
+  drawBackdrop(octx, canvas, r.w, r.h, scene.backdrop, scale);
+  const data = octx.getImageData(0, 0, out.width, out.height).data;
+  return { bytes: new Uint8Array(data.buffer), width: out.width, height: out.height };
 }

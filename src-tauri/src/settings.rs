@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
+use crate::output::{self, Format};
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -25,6 +27,12 @@ pub struct Settings {
     /// Captures are scaled to this percentage of the screen's pixels (100 =
     /// full resolution; 50 on a Retina display gives its point size).
     pub capture_scale: u32,
+    /// "png" or "jpg".
+    pub image_format: String,
+    /// JPEG quality, 1–100.
+    pub jpg_quality: u8,
+    /// File names for screenshots: strftime fields such as %Y-%m-%d.
+    pub file_template: String,
     /// Seconds counted down before a recording starts; 0 starts at once.
     pub record_countdown: u32,
     /// Recordings are scaled to this percentage of the screen's pixels.
@@ -55,6 +63,9 @@ impl Default for Settings {
             auto_copy: true,
             auto_save: false,
             capture_scale: 100,
+            image_format: "png".into(),
+            jpg_quality: 90,
+            file_template: crate::output::DEFAULT_TEMPLATE.into(),
             record_countdown: 3,
             record_scale: 100,
             preview_secs: 6,
@@ -67,6 +78,18 @@ impl Default for Settings {
 }
 
 impl Settings {
+    pub fn format(&self) -> Format {
+        match self.image_format.as_str() {
+            "jpg" => Format::Jpg(self.jpg_quality),
+            _ => Format::Png,
+        }
+    }
+
+    /// A screenshot's file name, from the template and the chosen format.
+    pub fn file_name(&self) -> String {
+        output::file_name(&self.file_template, self.format().ext())
+    }
+
     pub fn save_dir(&self, app: &AppHandle) -> PathBuf {
         if !self.save_dir.trim().is_empty() {
             return PathBuf::from(&self.save_dir);

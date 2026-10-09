@@ -21,6 +21,8 @@
   let img = $state<HTMLImageElement>()!;
   let loupe = $state<HTMLCanvasElement>();
   let loaded = $state(false);
+  // The color under the crosshair; `C` copies it.
+  let hex = $state<string | null>(null);
   // Live selection shows the screen itself through the window; null until known.
   let live = $state<boolean | null>(null);
   let done = false;
@@ -112,6 +114,10 @@
 
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") finish(null);
+    else if (e.key.toLowerCase() === "c" && mode === "area" && !recording && hex && !dragStart && !done) {
+      done = true;
+      invoke("overlay_pick_color", { index, hex });
+    }
     else if (e.key === " " && mode !== "text") {
       e.preventDefault();
       setMode(mode === "area" ? "window" : "area");
@@ -154,13 +160,19 @@
 
   function paintLoupe(source: CanvasImageSource, sx: number, sy: number, sw: number, sh: number) {
     if (!loupe) return;
-    const ctx = loupe.getContext("2d")!;
+    const ctx = loupe.getContext("2d", { willReadFrequently: true })!;
     const dpr = devicePixelRatio;
     loupe.width = LOUPE * dpr;
     loupe.height = LOUPE * dpr;
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(source, sx, sy, sw, sh, 0, 0, loupe.width, loupe.height);
     const c = loupe.width / 2;
+    try {
+      const [r, g, b] = ctx.getImageData(Math.floor(c), Math.floor(c), 1, 1).data;
+      hex = "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
+    } catch {
+      hex = null;
+    }
     ctx.strokeStyle = "rgba(37, 99, 235, 0.9)";
     ctx.lineWidth = dpr;
     ctx.beginPath();
@@ -240,7 +252,10 @@
     {/if}
     <div class="loupe" style="left:{loupePos.x}px; top:{loupePos.y}px">
       <canvas bind:this={loupe} style="width:{LOUPE}px; height:{LOUPE}px"></canvas>
-      <span>{Math.round(mouse.x * pxRatio)}, {Math.round(mouse.y * pxRatio)}</span>
+      <span>
+        {Math.round(mouse.x * pxRatio)}, {Math.round(mouse.y * pxRatio)}
+        {#if hex}<i class="swatch" style="background:{hex}"></i>{hex}{/if}
+      </span>
     </div>
   {/if}
 
@@ -251,6 +266,7 @@
       {#if recording}<strong>Record</strong> ·{/if}
       {mode === "area" ? "Drag to select" : "Click a window"} · <kbd>Space</kbd>
       {mode === "area" ? "window mode" : "area mode"}
+      {#if mode === "area" && !recording}· <kbd>C</kbd> copy color{/if}
     {/if}
     {#if live}· Scroll works{/if}
     · <kbd>Esc</kbd> cancel
@@ -327,6 +343,15 @@
     top: 0;
     bottom: 0;
     width: 1px;
+  }
+  .swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin: 0 4px 0 6px;
+    border: 1px solid rgba(255, 255, 255, 0.8);
+    border-radius: 2px;
+    vertical-align: -1px;
   }
   .loupe {
     position: absolute;

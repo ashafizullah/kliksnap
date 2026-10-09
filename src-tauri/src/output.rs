@@ -3,8 +3,9 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
+use xcap::image::codecs::jpeg::JpegEncoder;
 use xcap::image::codecs::png::PngEncoder;
-use xcap::image::{ExtendedColorType, ImageEncoder, RgbaImage};
+use xcap::image::{ExtendedColorType, ImageEncoder, RgbImage, RgbaImage};
 
 pub fn copy(img: &RgbaImage) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
@@ -17,25 +18,100 @@ pub fn copy(img: &RgbaImage) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-pub fn save_png(img: &RgbaImage, path: &Path) -> Result<(), String> {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Format {
+    Png,
+    /// JPEG at this quality, 1–100.
+    Jpg(u8),
+}
+
+impl Format {
+    pub fn ext(self) -> &'static str {
+        match self {
+            Format::Png => "png",
+            Format::Jpg(_) => "jpg",
+        }
+    }
+
+    /// The format a file name asks for, if it names one.
+    pub fn from_path(path: &Path, quality: u8) -> Option<Format> {
+        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+        match ext.as_str() {
+            "png" => Some(Format::Png),
+            "jpg" | "jpeg" => Some(Format::Jpg(quality)),
+            _ => None,
+        }
+    }
+}
+
+pub fn save(img: &RgbaImage, path: &Path, format: Format) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    PngEncoder::new(BufWriter::new(file))
-        .write_image(
-            img.as_raw(),
-            img.width(),
-            img.height(),
-            ExtendedColorType::Rgba8,
-        )
-        .map_err(|e| e.to_string())
+    let out = BufWriter::new(file);
+    let (w, h) = img.dimensions();
+    match format {
+        Format::Png => {
+            PngEncoder::new(out).write_image(img.as_raw(), w, h, ExtendedColorType::Rgba8)
+        }
+        Format::Jpg(quality) => {
+            let rgb = flatten(img);
+            JpegEncoder::new_with_quality(out, quality.clamp(1, 100)).write_image(
+                rgb.as_raw(),
+                w,
+                h,
+                ExtendedColorType::Rgb8,
+            )
+        }
+    }
+    .map_err(|e| e.to_string())
 }
 
-pub fn file_name() -> String {
-    chrono::Local::now()
-        .format("KlikSnap %Y-%m-%d at %H.%M.%S.png")
-        .to_string()
+/// JPEG has no alpha: transparent pixels (a clear backdrop) turn white.
+fn flatten(img: &RgbaImage) -> RgbImage {
+    RgbImage::from_fn(img.width(), img.height(), |x, y| {
+        let [r, g, b, a] = img.get_pixel(x, y).0;
+        let blend = |c: u8| ((c as u32 * a as u32 + 255 * (255 - a as u32)) / 255) as u8;
+        [blend(r), blend(g), blend(b)].into()
+    })
+}
+
+pub const DEFAULT_TEMPLATE: &str = "KlikSnap %Y-%m-%d at %H.%M.%S";
+
+/// The template's date fields filled in, with characters no file system
+/// allows replaced. A broken or empty template falls back to the default.
+pub fn file_name(template: &str, ext: &str) -> String {
+    file_name_at(template, ext, chrono::Local::now())
+}
+
+fn file_name_at<Tz: chrono::TimeZone>(
+    template: &str,
+    ext: &str,
+    now: chrono::DateTime<Tz>,
+) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use std::fmt::Write;
+    let fill = |t: &str| {
+        let mut out = String::new();
+        write!(out, "{}", now.format(t)).ok()?;
+        let clean: String = out
+            .chars()
+            .map(|c| match c {
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+                c if c.is_control() => '-',
+                c => c,
+            })
+            .collect();
+        let clean = clean.trim_matches(|c: char| c == '.' || c.is_whitespace());
+        (!clean.is_empty()).then(|| clean.to_string())
+    };
+    let stem = fill(template)
+        .or_else(|| fill(DEFAULT_TEMPLATE))
+        .unwrap_or_default();
+    format!("{stem}.{ext}")
 }
 
 pub fn recording_name() -> String {
@@ -100,6 +176,57 @@ pub fn bmp(img: &RgbaImage) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at() -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono::Utc.with_ymd_and_hms(2026, 10, 9, 7, 5, 3).unwrap()
+    }
+
+    #[test]
+    fn file_name_fills_the_template() {
+        assert_eq!(
+            file_name_at(DEFAULT_TEMPLATE, "png", at()),
+            "KlikSnap 2026-10-09 at 07.05.03.png"
+        );
+        assert_eq!(file_name_at("shot-%H%M%S", "jpg", at()), "shot-070503.jpg");
+    }
+
+    #[test]
+    fn file_name_replaces_bad_characters() {
+        assert_eq!(file_name_at("a/b:%H:%M", "png", at()), "a-b-07-05.png");
+        assert_eq!(file_name_at("  ..x.. ", "png", at()), "x.png");
+    }
+
+    #[test]
+    fn file_name_falls_back_on_a_broken_template() {
+        let fallback = "KlikSnap 2026-10-09 at 07.05.03.png";
+        assert_eq!(file_name_at("", "png", at()), fallback);
+        assert_eq!(file_name_at("%Q bad", "png", at()), fallback);
+        assert_eq!(file_name_at("/:..", "png", at()), "--.png");
+    }
+
+    #[test]
+    fn format_from_path() {
+        assert_eq!(
+            Format::from_path(Path::new("a.JPEG"), 80),
+            Some(Format::Jpg(80))
+        );
+        assert_eq!(Format::from_path(Path::new("a.png"), 80), Some(Format::Png));
+        assert_eq!(Format::from_path(Path::new("a.gif"), 80), None);
+        assert_eq!(Format::from_path(Path::new("a"), 80), None);
+    }
+
+    #[test]
+    fn saves_jpeg_with_transparency_flattened() {
+        let dir = std::env::temp_dir().join(format!("kliksnap-jpg-{}", std::process::id()));
+        let path = dir.join("a.jpg");
+        let img = RgbaImage::from_pixel(16, 16, [0, 0, 0, 0].into());
+        save(&img, &path, Format::Jpg(90)).unwrap();
+        let back = xcap::image::open(&path).unwrap().to_rgb8();
+        assert_eq!(back.dimensions(), (16, 16));
+        assert!(back.pixels().all(|p| p.0.iter().all(|&c| c > 245)));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn unique_path_keeps_the_extension() {

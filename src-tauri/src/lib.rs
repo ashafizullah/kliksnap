@@ -311,6 +311,36 @@ fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), 
     show_toast(app, toast, bounds)
 }
 
+/// Closes the selection and copies the color the user picked from the loupe.
+pub(crate) fn pick_color(app: &AppHandle, index: usize, hex: &str) -> Result<(), String> {
+    let valid =
+        hex.len() == 7 && hex.starts_with('#') && hex[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !valid {
+        return Err(format!("not a color: {hex}"));
+    }
+    let bounds = app
+        .state::<AppState>()
+        .frozen
+        .lock()
+        .unwrap()
+        .get(index)
+        .map(|f| f.bounds);
+    end_selection(app, None);
+    let hex = hex.to_ascii_uppercase();
+    arboard::Clipboard::new()
+        .and_then(|mut c| c.set_text(hex.clone()))
+        .map_err(|e| e.to_string())?;
+    let toast = Toast {
+        title: "Color copied".into(),
+        text: hex,
+        ..Default::default()
+    };
+    match bounds {
+        Some(b) => show_toast(app, toast, &b),
+        None => Ok(()),
+    }
+}
+
 fn show_toast(app: &AppHandle, toast: Toast, bounds: &Bounds) -> Result<(), String> {
     // A saved file's notice has one more line: where to click to see it.
     let tall = !toast.path.is_empty();
@@ -483,8 +513,8 @@ fn finish_shot(
         output::copy(&img)?;
     }
     if s.auto_save {
-        let path = output::unique_path(&s.save_dir(app), &output::file_name());
-        output::save_png(&img, &path)?;
+        let path = output::unique_path(&s.save_dir(app), &s.file_name());
+        output::save(&img, &path, s.format())?;
     }
     Ok(())
 }
@@ -610,6 +640,8 @@ pub fn run() {
             commands::stop_recording,
             commands::reveal_toast_file,
             commands::export_image,
+            commands::overlay_pick_color,
+            commands::file_name_example,
             commands::get_settings,
             commands::save_settings,
             commands::pick_folder,

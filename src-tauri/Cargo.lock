@@ -2144,6 +2144,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2422,12 +2424,13 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kliksnap"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "arboard",
  "block2",
  "chrono",
  "dispatch2",
+ "image",
  "objc2",
  "objc2-av-foundation",
  "objc2-core-foundation",

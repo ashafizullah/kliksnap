@@ -14,6 +14,9 @@
     auto_copy: boolean;
     auto_save: boolean;
     capture_scale: number;
+    image_format: "png" | "jpg";
+    jpg_quality: number;
+    file_template: string;
     record_countdown: number;
     record_scale: number;
     preview_secs: number;
@@ -78,6 +81,13 @@
       checking = false;
     }
   }
+
+  // What the next screenshot will be called, filled in by the Rust side.
+  let example = $state("");
+  $effect(() => {
+    if (!s) return;
+    invoke<string>("file_name_example", { template: s.file_template, format: s.image_format }).then((name) => (example = name));
+  });
 
   async function save() {
     if (!s) return;
@@ -269,6 +279,34 @@
             </select>
           </label>
         </section>
+
+        <section>
+          <h2>File</h2>
+          <label class="row">
+            <span>Format</span>
+            <select bind:value={s.image_format} onchange={save}>
+              <option value="png">PNG (lossless)</option>
+              <option value="jpg">JPG (smaller)</option>
+            </select>
+          </label>
+          {#if s.image_format === "jpg"}
+            <label class="row">
+              <span>JPG quality</span>
+              <span class="range">
+                <input type="range" min="40" max="100" step="5" bind:value={s.jpg_quality} onchange={save} />
+                <span class="value">{s.jpg_quality}</span>
+              </span>
+            </label>
+          {/if}
+          <label class="row">
+            <span>File name</span>
+            <input class="template" type="text" spellcheck="false" bind:value={s.file_template} onchange={save} />
+          </label>
+          <p class="hint">
+            {example}<br />
+            Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.
+          </p>
+        </section>
       {:else if tab === "recording"}
         <section>
           <h2>Recording</h2>
@@ -439,6 +477,29 @@
     white-space: nowrap;
     -webkit-user-select: text;
     user-select: text;
+  }
+  .range {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .range input {
+    width: 120px;
+    accent-color: var(--accent);
+  }
+  .value {
+    min-width: 3ch;
+    font-variant-numeric: tabular-nums;
+  }
+  .template {
+    width: 220px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
   }
   input[type="checkbox"] {
     width: 16px;
