@@ -37,6 +37,8 @@ pub struct Settings {
     pub record_countdown: u32,
     /// Recordings are scaled to this percentage of the screen's pixels.
     pub record_scale: u32,
+    /// How many recent captures History keeps; 0 keeps none.
+    pub history_limit: u32,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
     pub preview_secs: u32,
     /// Area/window selection over the live screen, captured once the
@@ -69,6 +71,7 @@ impl Default for Settings {
             record_countdown: 3,
             record_scale: 100,
             preview_secs: 6,
+            history_limit: 50,
             live_selection: true,
             launch_at_login: false,
             check_updates: true,

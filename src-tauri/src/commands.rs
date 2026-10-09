@@ -542,6 +542,54 @@ fn share_file(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(output::unique_path(&dir, &s.file_name()))
 }
 
+/// Async: creating a window from a synchronous command deadlocks on Windows.
+#[tauri::command]
+pub async fn open_history(app: AppHandle) -> Result<(), String> {
+    ui::open_history(&app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn history_list(app: AppHandle) -> Vec<crate::history::Entry> {
+    crate::history::list(&app)
+}
+
+/// Copy, Edit, Pin, Save or Delete a capture from History.
+#[tauri::command]
+pub async fn history_action(app: AppHandle, id: String, action: String) -> Result<(), String> {
+    if action == "delete" {
+        return crate::history::delete(&app, &id);
+    }
+    let (entry, img) = crate::history::get(&app, &id).ok_or("capture not found")?;
+    match action.as_str() {
+        "copy" => output::copy(&img),
+        "save" => save_to_folder(&app, &img).map(|_| ()),
+        "edit" | "pin" => {
+            let bounds = capture::Bounds {
+                scale: entry.scale,
+                ..capture::bounds_at(platform::cursor_pos())?
+            };
+            let state = app.state::<AppState>();
+            let id = state.insert_shot(Shot {
+                img: std::sync::Arc::new(img),
+                bounds,
+                origin: None,
+                refs: 0,
+            });
+            if action == "pin" {
+                open_pin(&app, id)
+            } else {
+                edit_shot(app.clone(), id, state).await
+            }
+        }
+        other => Err(format!("unknown action {other}")),
+    }
+}
+
+#[tauri::command]
+pub async fn history_clear(app: AppHandle) -> Result<(), String> {
+    crate::history::trim(&app, 0)
+}
+
 /// Boxes (`x, y, w, h` in image pixels) around the sensitive text in a shot.
 #[tauri::command]
 pub async fn find_sensitive(id: u32, state: State<'_, AppState>) -> Result<Vec<[f64; 4]>, String> {
@@ -599,6 +647,9 @@ pub fn save_settings(
     }
     if settings.show_tray != old.show_tray {
         tray::set_visible(&app, settings.show_tray);
+    }
+    if settings.history_limit < old.history_limit {
+        crate::history::trim(&app, settings.history_limit)?;
     }
     crate::settings::store(&app, &settings)?;
     *state.settings.lock().unwrap() = settings;

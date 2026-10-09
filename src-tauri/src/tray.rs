@@ -49,6 +49,7 @@ fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &item(app, "record_gif", "Record GIF", "")?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, "pin_clipboard", "Pin Clipboard Image", "")?,
+            &item(app, "history", "History…", "")?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, "settings", "Settings…", "")?,
             &item(app, "update", "Check for Updates…", "")?,
@@ -125,6 +126,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "record_gif" => crate::start_capture(app, Mode::RecordGif),
             "stop_record" => crate::stop_recording(app),
             "pin_clipboard" => crate::pin_clipboard(app),
+            "history" => {
+                let _ = crate::ui::open_history(app);
+            }
             "release_pins" => crate::release_click_through(app),
             "settings" => {
                 let _ = crate::ui::open_settings(app);

@@ -425,6 +425,21 @@ pub fn open_editor(
     Ok(label)
 }
 
+pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(win) = app.get_webview_window("history") {
+        win.show()?;
+        return win.set_focus();
+    }
+    WebviewWindowBuilder::new(app, "history", WebviewUrl::App("history.html".into()))
+        .title("KlikSnap History")
+        .inner_size(820.0, 600.0)
+        .min_inner_size(480.0, 360.0)
+        .center()
+        .visible(false)
+        .build()?;
+    Ok(())
+}
+
 pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("settings") {
         win.show()?;

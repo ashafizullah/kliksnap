@@ -1,6 +1,7 @@
 mod capture;
 mod commands;
 mod gif_writer;
+mod history;
 mod hotkeys;
 mod ocr;
 mod output;
@@ -519,12 +520,20 @@ fn finish_shot(
     // takes the lock in `on_window_destroyed`.
     let previews = state.previews.lock().unwrap().clone();
     ui::stack_previews(app, &previews, &bounds);
-    if s.auto_copy {
-        output::copy(&img)?;
-    }
     if s.auto_save {
         let path = output::unique_path(&s.save_dir(app), &s.file_name());
         output::save(&img, &path, s.format())?;
+    }
+    if s.history_limit > 0 {
+        let (app, img, limit) = (app.clone(), img.clone(), s.history_limit);
+        std::thread::spawn(move || {
+            if let Err(e) = history::add(&app, &img, bounds.scale, limit) {
+                eprintln!("history: {e}");
+            }
+        });
+    }
+    if s.auto_copy {
+        output::copy(&img)?;
     }
     Ok(())
 }
@@ -574,8 +583,11 @@ pub fn release_click_through(app: &AppHandle) {
     tray::refresh(app);
 }
 
-/// Serves captures to the webviews as `ks://localhost/<name>`.
-fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
+/// Serves captures to the webviews as `ks://localhost/<name>`, with their type.
+fn serve_image(app: &AppHandle, name: &str) -> Option<(Vec<u8>, &'static str)> {
+    if let Some(id) = name.strip_prefix("hist-") {
+        return Some((history::thumbnail(app, id)?, "image/jpeg"));
+    }
     let state = app.state::<AppState>();
     let mut parts = name.split('-');
     let kind = parts.next()?;
@@ -583,9 +595,12 @@ fn serve_image(app: &AppHandle, name: &str) -> Option<Vec<u8>> {
     match kind {
         "frozen" => {
             let frozen = state.frozen.lock().unwrap();
-            Some(output::bmp(frozen.get(n as usize)?.img.as_ref()?))
+            Some((
+                output::bmp(frozen.get(n as usize)?.img.as_ref()?),
+                "image/bmp",
+            ))
         }
-        "shot" => Some(output::bmp(&state.shot(n)?.0)),
+        "shot" => Some((output::bmp(&state.shot(n)?.0), "image/bmp")),
         _ => None,
     }
 }
@@ -647,8 +662,8 @@ pub fn run() {
             let name = request.uri().path().trim_start_matches('/').to_string();
             std::thread::spawn(move || {
                 let response = match serve_image(&app, &name) {
-                    Some(bytes) => Response::builder()
-                        .header(header::CONTENT_TYPE, "image/bmp")
+                    Some((bytes, mime)) => Response::builder()
+                        .header(header::CONTENT_TYPE, mime)
                         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                         .header(header::CACHE_CONTROL, "no-store")
                         .body(bytes),
@@ -701,6 +716,10 @@ pub fn run() {
             commands::overlay_pick_color,
             commands::file_name_example,
             commands::find_sensitive,
+            commands::history_list,
+            commands::open_history,
+            commands::history_action,
+            commands::history_clear,
             commands::get_settings,
             commands::save_settings,
             commands::pick_folder,

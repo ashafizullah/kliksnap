@@ -20,6 +20,7 @@
     record_countdown: number;
     record_scale: number;
     preview_secs: number;
+    history_limit: number;
     live_selection: boolean;
     launch_at_login: boolean;
     check_updates: boolean;
@@ -278,6 +279,25 @@
               <option value={0}>Never</option>
             </select>
           </label>
+        </section>
+
+        <section>
+          <h2>History</h2>
+          <label class="row">
+            <span>Keep recent captures</span>
+            <select bind:value={s.history_limit} onchange={save}>
+              <option value={0}>Off</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+          </label>
+          <div class="row">
+            <span>Find, copy or edit past captures</span>
+            <button class="secondary" onclick={() => invoke("open_history")}>Open History</button>
+          </div>
+          <p class="hint">Stored only on this {isMac ? "Mac" : "PC"}, and searchable by the text in them.</p>
         </section>
 
         <section>
