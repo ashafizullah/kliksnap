@@ -243,6 +243,11 @@ pub fn overlay_finish(app: AppHandle, index: usize, rect: Option<[f64; 4]>) {
     crate::end_selection(&app, rect.map(|r| (index, r)));
 }
 
+#[tauri::command]
+pub fn overlay_pick_color(app: AppHandle, index: usize, hex: String) -> Result<(), String> {
+    crate::pick_color(&app, index, &hex)
+}
+
 #[derive(Serialize)]
 pub struct ShotInfo {
     width: u32,
