@@ -25,6 +25,7 @@ serde_json = "1"
 xcap = "0.9.8"
 # JPEG export; unifies with the image crate xcap re-exports.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+gif = "0.14"
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-updater = "2.13.2"
@@ -39,6 +40,7 @@ objc2-screen-capture-kit = "0.3.2"
 objc2-av-foundation = { version = "0.3.2", features = ["objc2-core-media", "block2"] }
 objc2-core-media = { version = "0.3.2", features = ["objc2-core-video"] }
 objc2-core-foundation = "0.3.2"
+objc2-core-video = "0.3.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 rqrr = { version = "0.11.0", default-features = false }

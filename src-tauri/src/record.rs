@@ -1,6 +1,7 @@
 //! Screen recording to MP4 with the encoders built into the OS:
 //! ScreenCaptureKit + AVAssetWriter on macOS, Windows Graphics Capture +
-//! Media Foundation on Windows. No audio.
+//! Media Foundation on Windows. A `.gif` path records an animated GIF
+//! instead, from the same frames.
 
 use std::path::Path;
 
@@ -12,9 +13,20 @@ pub use imp::Recorder;
 pub const FPS: u32 = 30;
 
 /// Starts recording `rect` (fractions of monitor `b`) into an MP4 at `path`,
-/// at `percent` of the screen's resolution.
+/// or a GIF if the path ends in `.gif`, at `percent` of the screen's resolution.
 pub fn start(b: &Bounds, rect: [f64; 4], percent: u32, path: &Path) -> Result<Recorder, String> {
-    imp::Recorder::start(b, region(b, rect, percent), path)
+    let mut r = region(b, rect, percent);
+    if is_gif(path) {
+        let (w, h) = crate::gif_writer::fit(r.px_w, r.px_h);
+        r.scaled |= (w, h) != (r.px_w, r.px_h);
+        (r.px_w, r.px_h) = (w, h);
+    }
+    imp::Recorder::start(b, r, path)
+}
+
+pub fn is_gif(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("gif"))
 }
 
 /// A region of a monitor: `x, y, w, h` in its points (macOS) or pixels
@@ -125,15 +137,59 @@ mod imp {
 
     use super::{Region, FPS};
     use crate::capture::Bounds;
+    use crate::gif_writer::GifWriter;
 
     const WAIT: Duration = Duration::from_secs(10);
 
-    pub struct Writer {
+    pub enum Writer {
+        Mp4(Mp4),
+        Gif(std::sync::Mutex<Option<GifWriter>>),
+    }
+
+    pub struct Mp4 {
         writer: Retained<AVAssetWriter>,
         input: Retained<AVAssetWriterInput>,
         started: AtomicBool,
         /// The newest frame, appended again when recording stops.
         last: std::sync::Mutex<Option<CFRetained<CMSampleBuffer>>>,
+    }
+
+    fn seconds(t: CMTime) -> Duration {
+        if t.timescale <= 0 || t.value < 0 {
+            return Duration::ZERO;
+        }
+        Duration::from_secs_f64(t.value as f64 / t.timescale as f64)
+    }
+
+    /// Hands the frame's pixels to the GIF writer.
+    unsafe fn push_gif(gif: &std::sync::Mutex<Option<GifWriter>>, buffer: &CMSampleBuffer) {
+        use objc2_core_video::{
+            CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
+            CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+        };
+        unsafe {
+            let Some(image) = buffer.image_buffer() else {
+                return;
+            };
+            if CVPixelBufferLockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly) != 0 {
+                return;
+            }
+            let base = CVPixelBufferGetBaseAddress(&image);
+            let stride = CVPixelBufferGetBytesPerRow(&image);
+            let h = CVPixelBufferGetHeight(&image);
+            if !base.is_null() {
+                let pixels = std::slice::from_raw_parts(base as *const u8, stride * h);
+                if let Some(g) = gif.lock().unwrap().as_mut() {
+                    g.push(
+                        pixels,
+                        stride,
+                        false,
+                        seconds(buffer.presentation_time_stamp()),
+                    );
+                }
+            }
+            CVPixelBufferUnlockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly);
+        }
     }
 
     define_class!(
@@ -156,12 +212,15 @@ mod imp {
                 if kind != SCStreamOutputType::Screen {
                     return;
                 }
-                let w = self.ivars();
                 unsafe {
                     // Frames where nothing changed carry no image.
                     if !buffer.is_valid() || buffer.image_buffer().is_none() {
                         return;
                     }
+                    let w = match self.ivars() {
+                        Writer::Mp4(w) => w,
+                        Writer::Gif(g) => return push_gif(g, buffer),
+                    };
                     if !w.started.swap(true, Ordering::SeqCst) {
                         w.writer
                             .startSessionAtSourceTime(buffer.presentation_time_stamp());
@@ -234,7 +293,13 @@ mod imp {
                 config.setQueueDepth(6);
             }
 
-            let writer = new_writer(path, r)?;
+            let writer = if super::is_gif(path) {
+                Writer::Gif(std::sync::Mutex::new(Some(GifWriter::new(
+                    path, r.px_w, r.px_h,
+                )?)))
+            } else {
+                Writer::Mp4(new_writer(path, r)?)
+            };
             let output = Output::alloc().set_ivars(writer);
             let output: Retained<Output> = unsafe { msg_send![super(output), init] };
             let queue = DispatchQueue::new("app.kliksnap.record", None);
@@ -295,6 +360,18 @@ mod imp {
     }
 
     unsafe fn finish(w: &Writer) -> Result<(), String> {
+        let w = match w {
+            Writer::Mp4(w) => w,
+            Writer::Gif(g) => {
+                let end = seconds(CMClock::host_time_clock().time());
+                return g
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .ok_or("already stopped")?
+                    .finish(end);
+            }
+        };
         unsafe {
             if !w.started.load(Ordering::SeqCst) {
                 w.writer.cancelWriting();
@@ -361,7 +438,7 @@ mod imp {
             .map_err(|_| "screen recording isn't allowed".to_string())?
     }
 
-    fn new_writer(path: &Path, r: Region) -> Result<Writer, String> {
+    fn new_writer(path: &Path, r: Region) -> Result<Mp4, String> {
         let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
         let missing = || "AVFoundation constants missing".to_string();
         unsafe {
@@ -390,7 +467,7 @@ mod imp {
                         e.localizedDescription().to_string()
                     }));
             }
-            Ok(Writer {
+            Ok(Mp4 {
                 writer,
                 input,
                 started: AtomicBool::new(false),
@@ -423,12 +500,14 @@ mod imp {
 
     use super::{Region, FPS};
     use crate::capture::Bounds;
+    use crate::gif_writer::GifWriter;
 
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     pub struct Handler {
         region: Region,
         encoder: Option<VideoEncoder>,
+        gif: Option<GifWriter>,
         scratch: Vec<u8>,
         /// The newest frame (bottom-up rows), sent again when recording stops.
         last: Option<Vec<u8>>,
@@ -440,6 +519,15 @@ mod imp {
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
             let (region, path) = ctx.flags;
+            if super::is_gif(&path) {
+                return Ok(Self {
+                    region,
+                    encoder: None,
+                    gif: Some(GifWriter::new(&path, region.px_w, region.px_h)?),
+                    scratch: Vec::new(),
+                    last: None,
+                });
+            }
             let bitrate = (region.px_w * region.px_h * 4).clamp(2_000_000, 15_000_000);
             let encoder = VideoEncoder::new(
                 VideoSettingsBuilder::new(region.px_w, region.px_h)
@@ -453,6 +541,7 @@ mod imp {
             Ok(Self {
                 region,
                 encoder: Some(encoder),
+                gif: None,
                 scratch: Vec::new(),
                 last: None,
             })
@@ -491,6 +580,11 @@ mod imp {
             };
             if let Some(encoder) = self.encoder.as_mut() {
                 encoder.send_frame_buffer(&flipped, timestamp)?;
+            }
+            if let Some(gif) = self.gif.as_mut() {
+                let t = Duration::from_nanos(timestamp.max(0) as u64 * 100);
+                gif.push(&flipped, r.px_w as usize * 4, true, t);
+                return Ok(());
             }
             self.last = Some(flipped);
             Ok(())
@@ -540,6 +634,9 @@ mod imp {
             let handler = self.control.callback();
             self.control.stop().map_err(|e| e.to_string())?;
             let mut h = handler.lock();
+            if let Some(gif) = h.gif.take() {
+                return gif.finish(Duration::from_nanos(now().max(0) as u64 * 100));
+            }
             let mut encoder = h.encoder.take().ok_or("nothing was recorded")?;
             // Frames only come when the screen changes: repeat the last one
             // now, or a still ending would be cut off.
@@ -627,5 +724,19 @@ mod tests {
             let len = std::fs::metadata(&path).unwrap().len();
             assert!(len > 1000, "{percent}%: file is only {len} bytes");
         }
+    }
+
+    /// Like `records_an_mp4`, for a GIF. Run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn records_a_gif() {
+        let b = crate::capture::bounds_at((10, 10)).unwrap();
+        let path = std::env::temp_dir().join("kliksnap-record-test.gif");
+        let _ = std::fs::remove_file(&path);
+        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        rec.stop().unwrap();
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len > 1000, "file is only {len} bytes");
     }
 }

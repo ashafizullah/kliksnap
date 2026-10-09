@@ -195,12 +195,12 @@
   });
 
   async function init() {
-    const info = await invoke<{ mode: Mode | "screen" | "record"; width: number } | null>("overlay_info", { index });
+    const info = await invoke<{ mode: Mode | "screen" | "record" | "record_gif"; width: number } | null>("overlay_info", { index });
     if (!info) return finish(null);
     imageWidth = info.width;
     live = info.width === 0;
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
-    recording = info.mode === "record";
+    recording = info.mode === "record" || info.mode === "record_gif";
     if (live) {
       ready();
       liveLoupe();

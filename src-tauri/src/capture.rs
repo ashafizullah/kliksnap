@@ -20,6 +20,9 @@ pub enum Mode {
     /// Records the whole screen under the cursor.
     #[serde(rename = "record_screen")]
     RecordScreen,
+    /// Area selection that records an animated GIF of it.
+    #[serde(rename = "record_gif")]
+    RecordGif,
 }
 
 /// Monitor bounds in xcap's coordinate space, which is also the space Tauri

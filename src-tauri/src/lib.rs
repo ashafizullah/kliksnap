@@ -1,5 +1,6 @@
 mod capture;
 mod commands;
+mod gif_writer;
 mod hotkeys;
 mod ocr;
 mod output;
@@ -131,7 +132,7 @@ impl AppState {
 pub fn start_capture(app: &AppHandle, mode: Mode) {
     let state = app.state::<AppState>();
     // The record shortcut and menu items stop a recording in progress.
-    if matches!(mode, Mode::Record | Mode::RecordScreen)
+    if matches!(mode, Mode::Record | Mode::RecordScreen | Mode::RecordGif)
         && state.recording.lock().unwrap().is_some()
     {
         stop_recording(app);
@@ -171,7 +172,7 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
         let bounds = capture::bounds_at(platform::cursor_pos())?;
         state.busy.store(false, Ordering::SeqCst);
         reveal_previews(app);
-        start_recording(app, bounds, [0.0, 0.0, 1.0, 1.0]);
+        start_recording(app, bounds, [0.0, 0.0, 1.0, 1.0], false);
         return Ok(());
     }
     if mode == Mode::Screen {
@@ -232,14 +233,14 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
         return;
     };
     let mode = *state.mode.lock().unwrap();
-    if mode == Mode::Record {
+    if matches!(mode, Mode::Record | Mode::RecordGif) {
         state.busy.store(false, Ordering::SeqCst);
         reveal_previews(app);
         let app = app.clone();
         std::thread::spawn(move || {
             // Give the overlays time to leave the screen.
             std::thread::sleep(Duration::from_millis(150));
-            start_recording(&app, f.bounds, rect);
+            start_recording(&app, f.bounds, rect, mode == Mode::RecordGif);
         });
         return;
     }
@@ -353,8 +354,8 @@ fn show_toast(app: &AppHandle, toast: Toast, bounds: &Bounds) -> Result<(), Stri
 }
 
 /// Starts recording `rect` (fractions of the monitor at `bounds`) into the
-/// save folder, with a Stop control in the corner.
-fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) {
+/// save folder, as a GIF if `gif`, with a Stop control in the corner.
+fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let state = app.state::<AppState>();
     let secs = state.settings().record_countdown;
     if secs > 0 {
@@ -369,7 +370,8 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) {
     }
     let settings = state.settings();
     let dir = settings.save_dir(app);
-    let path = output::unique_path(&dir, &output::recording_name());
+    let ext = if gif { "gif" } else { "mp4" };
+    let path = output::unique_path(&dir, &output::recording_name(ext));
     let started = std::fs::create_dir_all(&dir)
         .map_err(|e| e.to_string())
         .and_then(|_| record::start(&bounds, rect, settings.record_scale, &path));
@@ -408,7 +410,11 @@ pub fn stop_recording(app: &AppHandle) {
     std::thread::spawn(move || {
         let toast = match rec.recorder.stop() {
             Ok(()) => Toast {
-                title: "Recording saved".into(),
+                title: if record::is_gif(&rec.path) {
+                    "GIF saved".into()
+                } else {
+                    "Recording saved".into()
+                },
                 text: rec
                     .path
                     .file_name()
