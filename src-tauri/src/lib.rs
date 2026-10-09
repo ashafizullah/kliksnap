@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "windows", test))]
+mod audio_mix;
 mod capture;
 mod commands;
 mod gif_writer;
@@ -405,7 +407,13 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let path = output::unique_path(&dir, &output::recording_name(ext));
     let started = std::fs::create_dir_all(&dir)
         .map_err(|e| e.to_string())
-        .and_then(|_| record::start(&bounds, rect, settings.record_scale, &path));
+        .and_then(|_| {
+            let audio = record::Audio {
+                system: settings.record_system_audio,
+                mic: settings.record_mic,
+            };
+            record::start(&bounds, rect, settings.record_scale, &path, audio)
+        });
     match started {
         Ok(recorder) => {
             *state.recording.lock().unwrap() = Some(Recording {

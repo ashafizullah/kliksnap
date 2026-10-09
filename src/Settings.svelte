@@ -20,6 +20,8 @@
     file_template: string;
     record_countdown: number;
     record_scale: number;
+    record_system_audio: boolean;
+    record_mic: boolean;
     preview_secs: number;
     history_limit: number;
     live_selection: boolean;
@@ -353,6 +355,23 @@
             {s.record_scale < 100
               ? `Smaller videos, less detail.${isMac ? " On a Retina display, Low records at the size things appear on screen." : ""}`
               : "Full detail; the largest files."}
+          </p>
+        </section>
+
+        <section>
+          <h2>Sound</h2>
+          <label class="row">
+            <span>Record computer sound</span>
+            <input type="checkbox" bind:checked={s.record_system_audio} onchange={save} />
+          </label>
+          <label class="row">
+            <span>Record microphone</span>
+            <input type="checkbox" bind:checked={s.record_mic} onchange={save} />
+          </label>
+          <p class="hint">
+            {isMac
+              ? "Computer sound needs macOS 13 or later, the microphone macOS 15. Each goes on its own track. GIFs have no sound."
+              : "Both are mixed into one track. GIFs have no sound."}
           </p>
         </section>
       {:else}

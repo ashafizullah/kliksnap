@@ -1,7 +1,8 @@
 //! Screen recording to MP4 with the encoders built into the OS:
 //! ScreenCaptureKit + AVAssetWriter on macOS, Windows Graphics Capture +
 //! Media Foundation on Windows. A `.gif` path records an animated GIF
-//! instead, from the same frames.
+//! instead, from the same frames. MP4s can carry the system's sound and the
+//! microphone.
 
 use std::path::Path;
 
@@ -12,16 +13,33 @@ pub use imp::Recorder;
 /// Frames per second recorded.
 pub const FPS: u32 = 30;
 
+/// Which sound an MP4 recording carries.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Audio {
+    /// What the computer plays.
+    pub system: bool,
+    pub mic: bool,
+}
+
 /// Starts recording `rect` (fractions of monitor `b`) into an MP4 at `path`,
 /// or a GIF if the path ends in `.gif`, at `percent` of the screen's resolution.
-pub fn start(b: &Bounds, rect: [f64; 4], percent: u32, path: &Path) -> Result<Recorder, String> {
+pub fn start(
+    b: &Bounds,
+    rect: [f64; 4],
+    percent: u32,
+    path: &Path,
+    audio: Audio,
+) -> Result<Recorder, String> {
     let mut r = region(b, rect, percent);
-    if is_gif(path) {
+    let audio = if is_gif(path) {
         let (w, h) = crate::gif_writer::fit(r.px_w, r.px_h);
         r.scaled |= (w, h) != (r.px_w, r.px_h);
         (r.px_w, r.px_h) = (w, h);
-    }
-    imp::Recorder::start(b, r, path)
+        Audio::default()
+    } else {
+        audio
+    };
+    imp::Recorder::start(b, r, path, audio)
 }
 
 pub fn is_gif(path: &Path) -> bool {
@@ -118,11 +136,11 @@ mod imp {
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, ProtocolObject};
-    use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass};
+    use objc2::runtime::{AnyObject, Bool, ProtocolObject, Sel};
+    use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass};
     use objc2_av_foundation::{
-        AVAssetWriter, AVAssetWriterInput, AVAssetWriterStatus, AVFileTypeMPEG4, AVMediaTypeVideo,
-        AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
+        AVAssetWriter, AVAssetWriterInput, AVAssetWriterStatus, AVFileTypeMPEG4, AVMediaTypeAudio,
+        AVMediaTypeVideo, AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
     };
     use objc2_core_foundation::CFRetained;
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
@@ -149,6 +167,9 @@ mod imp {
     pub struct Mp4 {
         writer: Retained<AVAssetWriter>,
         input: Retained<AVAssetWriterInput>,
+        /// One audio track each, for the system's sound and the microphone.
+        system: Option<Retained<AVAssetWriterInput>>,
+        mic: Option<Retained<AVAssetWriterInput>>,
         started: AtomicBool,
         /// The newest frame, appended again when recording stops.
         last: std::sync::Mutex<Option<CFRetained<CMSampleBuffer>>>,
@@ -210,6 +231,23 @@ mod imp {
                 kind: SCStreamOutputType,
             ) {
                 if kind != SCStreamOutputType::Screen {
+                    if let Writer::Mp4(w) = self.ivars() {
+                        let input = if kind == SCStreamOutputType::Audio {
+                            w.system.as_ref()
+                        } else if kind == SCStreamOutputType::Microphone {
+                            w.mic.as_ref()
+                        } else {
+                            None
+                        };
+                        // Sound before the first frame would precede the session.
+                        if let Some(input) = input.filter(|_| w.started.load(Ordering::SeqCst)) {
+                            unsafe {
+                                if buffer.is_valid() && input.isReadyForMoreMediaData() {
+                                    input.appendSampleBuffer(buffer);
+                                }
+                            }
+                        }
+                    }
                     return;
                 }
                 unsafe {
@@ -259,7 +297,12 @@ mod imp {
     }
 
     impl Recorder {
-        pub fn start(b: &Bounds, r: Region, path: &Path) -> Result<Self, String> {
+        pub fn start(
+            b: &Bounds,
+            r: Region,
+            path: &Path,
+            audio: super::Audio,
+        ) -> Result<Self, String> {
             let content = shareable_content()?;
             let display = unsafe { content.displays() }
                 .iter()
@@ -292,13 +335,34 @@ mod imp {
                 config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
                 config.setQueueDepth(6);
             }
+            let responds = |selector: Sel| -> bool {
+                let r: Bool = unsafe { msg_send![&*config, respondsToSelector: selector] };
+                r.as_bool()
+            };
+            if audio.system {
+                if !responds(sel!(setCapturesAudio:)) {
+                    return Err("recording sound needs macOS 13 or later".into());
+                }
+                unsafe {
+                    config.setCapturesAudio(true);
+                    config.setExcludesCurrentProcessAudio(true);
+                    config.setSampleRate(48_000);
+                    config.setChannelCount(2);
+                }
+            }
+            if audio.mic {
+                if !responds(sel!(setCaptureMicrophone:)) {
+                    return Err("recording the microphone needs macOS 15 or later".into());
+                }
+                unsafe { config.setCaptureMicrophone(true) };
+            }
 
             let writer = if super::is_gif(path) {
                 Writer::Gif(std::sync::Mutex::new(Some(GifWriter::new(
                     path, r.px_w, r.px_h,
                 )?)))
             } else {
-                Writer::Mp4(new_writer(path, r)?)
+                Writer::Mp4(new_writer(path, r, audio)?)
             };
             let output = Output::alloc().set_ivars(writer);
             let output: Retained<Output> = unsafe { msg_send![super(output), init] };
@@ -311,14 +375,23 @@ mod imp {
                     None,
                 )
             };
-            unsafe {
-                stream.addStreamOutput_type_sampleHandlerQueue_error(
-                    ProtocolObject::from_ref(&*output),
-                    SCStreamOutputType::Screen,
-                    Some(&queue),
-                )
+            let mut kinds = vec![SCStreamOutputType::Screen];
+            if audio.system {
+                kinds.push(SCStreamOutputType::Audio);
             }
-            .map_err(|e| e.localizedDescription().to_string())?;
+            if audio.mic {
+                kinds.push(SCStreamOutputType::Microphone);
+            }
+            for kind in kinds {
+                unsafe {
+                    stream.addStreamOutput_type_sampleHandlerQueue_error(
+                        ProtocolObject::from_ref(&*output),
+                        kind,
+                        Some(&queue),
+                    )
+                }
+                .map_err(|e| e.localizedDescription().to_string())?;
+            }
             let (tx, rx) = mpsc::channel();
             let done = RcBlock::new(move |e: *mut NSError| {
                 let _ = tx.send(ns_error(e));
@@ -404,6 +477,9 @@ mod imp {
                 }
             }
             w.input.markAsFinished();
+            for input in [&w.system, &w.mic].into_iter().flatten() {
+                input.markAsFinished();
+            }
             w.writer.endSessionAtSourceTime(end);
             let (tx, rx) = mpsc::channel();
             let done = RcBlock::new(move || {
@@ -438,7 +514,32 @@ mod imp {
             .map_err(|_| "screen recording isn't allowed".to_string())?
     }
 
-    fn new_writer(path: &Path, r: Region) -> Result<Mp4, String> {
+    /// An AAC track at 48 kHz; the writer converts whatever comes in.
+    fn audio_input(channels: u32) -> Result<Retained<AVAssetWriterInput>, String> {
+        let media = unsafe { AVMediaTypeAudio }.ok_or("AVFoundation constants missing")?;
+        let keys = [
+            NSString::from_str("AVFormatIDKey"),
+            NSString::from_str("AVSampleRateKey"),
+            NSString::from_str("AVNumberOfChannelsKey"),
+            NSString::from_str("AVEncoderBitRateKey"),
+        ];
+        let values = [
+            NSNumber::new_u32(u32::from_be_bytes(*b"aac ")),
+            NSNumber::new_u32(48_000),
+            NSNumber::new_u32(channels),
+            NSNumber::new_u32(if channels > 1 { 160_000 } else { 96_000 }),
+        ];
+        let keys: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
+        let values: Vec<&AnyObject> = values.iter().map(|v| &***v as &AnyObject).collect();
+        let settings = NSDictionary::from_slices(&keys, &values);
+        let input = unsafe {
+            AVAssetWriterInput::assetWriterInputWithMediaType_outputSettings(media, Some(&settings))
+        };
+        unsafe { input.setExpectsMediaDataInRealTime(true) };
+        Ok(input)
+    }
+
+    fn new_writer(path: &Path, r: Region, audio: super::Audio) -> Result<Mp4, String> {
         let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
         let missing = || "AVFoundation constants missing".to_string();
         unsafe {
@@ -460,6 +561,14 @@ mod imp {
             );
             input.setExpectsMediaDataInRealTime(true);
             writer.addInput(&input);
+            let system = audio.system.then(|| audio_input(2)).transpose()?;
+            let mic = audio.mic.then(|| audio_input(1)).transpose()?;
+            for a in [&system, &mic].into_iter().flatten() {
+                if !writer.canAddInput(a) {
+                    return Err("couldn't add a sound track".into());
+                }
+                writer.addInput(a);
+            }
             if !writer.startWriting() {
                 return Err(writer
                     .error()
@@ -470,6 +579,8 @@ mod imp {
             Ok(Mp4 {
                 writer,
                 input,
+                system,
+                mic,
                 started: AtomicBool::new(false),
                 last: std::sync::Mutex::new(None),
             })
@@ -514,11 +625,12 @@ mod imp {
     }
 
     impl GraphicsCaptureApiHandler for Handler {
-        type Flags = (Region, PathBuf);
+        /// The region, the file, and whether it gets a sound track.
+        type Flags = (Region, PathBuf, bool);
         type Error = Error;
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-            let (region, path) = ctx.flags;
+            let (region, path, sound) = ctx.flags;
             if super::is_gif(&path) {
                 return Ok(Self {
                     region,
@@ -534,7 +646,8 @@ mod imp {
                     .sub_type(VideoSettingsSubType::H264)
                     .frame_rate(FPS)
                     .bitrate(bitrate),
-                AudioSettingsBuilder::default().disabled(true),
+                // 48 kHz stereo 16-bit, what `audio_mix` produces.
+                AudioSettingsBuilder::new().disabled(!sound),
                 ContainerSettingsBuilder::default(),
                 &path,
             )?;
@@ -593,6 +706,167 @@ mod imp {
 
     pub struct Recorder {
         control: CaptureControl<Handler, Error>,
+        sound: Option<sound::Sound>,
+    }
+
+    /// Captures the system's sound (WASAPI loopback) and the microphone,
+    /// mixed into one track.
+    mod sound {
+        use std::collections::VecDeque;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc, Mutex};
+        use std::thread::JoinHandle;
+        use std::time::{Duration, Instant};
+
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        use crate::audio_mix::{self, Resampler, RATE};
+
+        type Queue = Arc<Mutex<VecDeque<[f32; 2]>>>;
+
+        pub struct Sound {
+            stop: Arc<AtomicBool>,
+            thread: Option<JoinHandle<()>>,
+        }
+
+        impl Sound {
+            /// Calls `send` every few milliseconds with the sound since the
+            /// last call, as 48 kHz stereo 16-bit PCM; silence when there's none.
+            pub fn start(
+                system: bool,
+                mic: bool,
+                mut send: impl FnMut(&[u8]) + Send + 'static,
+            ) -> Result<Self, String> {
+                let stop = Arc::new(AtomicBool::new(false));
+                let flag = stop.clone();
+                let (ready_tx, ready_rx) = mpsc::channel();
+                // cpal streams can't move between threads: open, run and
+                // close them all on this one.
+                let thread = std::thread::spawn(move || {
+                    let host = cpal::default_host();
+                    let mut sources = Vec::new();
+                    let mut opened = Ok(());
+                    if system {
+                        opened = opened.and_then(|_| {
+                            sources.push(open(host.default_output_device(), true)?);
+                            Ok(())
+                        });
+                    }
+                    if mic {
+                        opened = opened.and_then(|_| {
+                            sources.push(open(host.default_input_device(), false)?);
+                            Ok(())
+                        });
+                    }
+                    let failed = opened.is_err();
+                    let _ = ready_tx.send(opened);
+                    if failed {
+                        return;
+                    }
+                    let queues: Vec<Queue> = sources.iter().map(|(_, q)| q.clone()).collect();
+                    let start = Instant::now();
+                    let mut sent = 0u64;
+                    while !flag.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(10));
+                        let due = (start.elapsed().as_secs_f64() * RATE as f64) as u64;
+                        let n = due.saturating_sub(sent) as usize;
+                        if n == 0 {
+                            continue;
+                        }
+                        let pcm = {
+                            let mut guards: Vec<_> =
+                                queues.iter().map(|q| q.lock().unwrap()).collect();
+                            let mut refs: Vec<&mut VecDeque<[f32; 2]>> =
+                                guards.iter_mut().map(|g| &mut **g).collect();
+                            audio_mix::mix(&mut refs, n)
+                        };
+                        send(&pcm);
+                        sent += n as u64;
+                    }
+                    drop(sources);
+                });
+                ready_rx
+                    .recv()
+                    .map_err(|_| "the sound thread stopped".to_string())??;
+                Ok(Self {
+                    stop,
+                    thread: Some(thread),
+                })
+            }
+
+            pub fn stop(mut self) {
+                self.stop.store(true, Ordering::SeqCst);
+                if let Some(t) = self.thread.take() {
+                    let _ = t.join();
+                }
+            }
+        }
+
+        /// Starts capturing from a device: an output device records what it
+        /// plays (loopback), an input device what it hears.
+        fn open(
+            device: Option<cpal::Device>,
+            loopback: bool,
+        ) -> Result<(cpal::Stream, Queue), String> {
+            let device = device.ok_or(if loopback {
+                "no speakers or headphones found"
+            } else {
+                "no microphone found"
+            })?;
+            let config = if loopback {
+                device.default_output_config()
+            } else {
+                device.default_input_config()
+            }
+            .map_err(|e| e.to_string())?;
+            let channels = config.channels() as usize;
+            let rate = config.sample_rate().0;
+            let format = config.sample_format();
+            let stream_config: cpal::StreamConfig = config.into();
+            let queue: Queue = Arc::default();
+            let q = queue.clone();
+            let mut resampler = Resampler::new(rate);
+            let mut feed = move |samples: &mut dyn Iterator<Item = f32>| {
+                let mut out = Vec::new();
+                audio_mix::stereo(samples, channels, |f| resampler.push(f, &mut out));
+                audio_mix::enqueue(&mut q.lock().unwrap(), &out);
+            };
+            let on_error = |e: cpal::StreamError| eprintln!("sound: {e}");
+            let stream = match format {
+                cpal::SampleFormat::F32 => device.build_input_stream(
+                    &stream_config,
+                    move |data: &[f32], _: &_| feed(&mut data.iter().copied()),
+                    on_error,
+                    None,
+                ),
+                cpal::SampleFormat::I16 => device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i16], _: &_| feed(&mut data.iter().map(|&s| s as f32 / 32_768.0)),
+                    on_error,
+                    None,
+                ),
+                cpal::SampleFormat::I32 => device.build_input_stream(
+                    &stream_config,
+                    move |data: &[i32], _: &_| {
+                        feed(&mut data.iter().map(|&s| s as f32 / 2_147_483_648.0))
+                    },
+                    on_error,
+                    None,
+                ),
+                cpal::SampleFormat::U16 => device.build_input_stream(
+                    &stream_config,
+                    move |data: &[u16], _: &_| {
+                        feed(&mut data.iter().map(|&s| (s as f32 - 32_768.0) / 32_768.0))
+                    },
+                    on_error,
+                    None,
+                ),
+                other => return Err(format!("unsupported sound format {other}")),
+            }
+            .map_err(|e| e.to_string())?;
+            stream.play().map_err(|e| e.to_string())?;
+            Ok((stream, queue))
+        }
     }
 
     /// Now on the capture clock (QPC, in 100 ns units).
@@ -609,7 +883,13 @@ mod imp {
     }
 
     impl Recorder {
-        pub fn start(b: &Bounds, r: Region, path: &Path) -> Result<Self, String> {
+        pub fn start(
+            b: &Bounds,
+            r: Region,
+            path: &Path,
+            audio: super::Audio,
+        ) -> Result<Self, String> {
+            let with_sound = audio.system || audio.mic;
             let center = POINT {
                 x: b.x + b.w as i32 / 2,
                 y: b.y + b.h as i32 / 2,
@@ -624,13 +904,37 @@ mod imp {
                 MinimumUpdateIntervalSettings::Custom(Duration::from_millis(1000 / FPS as u64)),
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                (r, path.to_path_buf()),
+                (r, path.to_path_buf(), with_sound),
             );
             let control = Handler::start_free_threaded(settings).map_err(|e| e.to_string())?;
-            Ok(Self { control })
+            if !with_sound {
+                return Ok(Self {
+                    control,
+                    sound: None,
+                });
+            }
+            let handler = control.callback();
+            let sound = sound::Sound::start(audio.system, audio.mic, move |pcm| {
+                if let Some(encoder) = handler.lock().encoder.as_mut() {
+                    let _ = encoder.send_audio_buffer(pcm, 0);
+                }
+            });
+            match sound {
+                Ok(sound) => Ok(Self {
+                    control,
+                    sound: Some(sound),
+                }),
+                Err(e) => {
+                    let _ = control.stop();
+                    Err(e)
+                }
+            }
         }
 
-        pub fn stop(self) -> Result<(), String> {
+        pub fn stop(mut self) -> Result<(), String> {
+            if let Some(sound) = self.sound.take() {
+                sound.stop();
+            }
             let handler = self.control.callback();
             self.control.stop().map_err(|e| e.to_string())?;
             let mut h = handler.lock();
@@ -656,7 +960,12 @@ mod imp {
     pub struct Recorder;
 
     impl Recorder {
-        pub fn start(_b: &Bounds, _r: Region, _path: &std::path::Path) -> Result<Self, String> {
+        pub fn start(
+            _b: &Bounds,
+            _r: Region,
+            _path: &std::path::Path,
+            _audio: super::Audio,
+        ) -> Result<Self, String> {
             Err("screen recording isn't supported here".into())
         }
         pub fn stop(self) -> Result<(), String> {
@@ -718,12 +1027,29 @@ mod tests {
         let path = std::env::temp_dir().join("kliksnap-record-test.mp4");
         for percent in [100, 50] {
             let _ = std::fs::remove_file(&path);
-            let rec = start(&b, [0.0, 0.0, 0.5, 0.5], percent, &path).unwrap();
+            let rec = start(&b, [0.0, 0.0, 0.5, 0.5], percent, &path, Audio::default()).unwrap();
             std::thread::sleep(std::time::Duration::from_secs(2));
             rec.stop().unwrap();
             let len = std::fs::metadata(&path).unwrap().len();
             assert!(len > 1000, "{percent}%: file is only {len} bytes");
         }
+    }
+
+    /// Records with the system's sound; needs the same permission.
+    #[test]
+    #[ignore]
+    fn records_with_sound() {
+        let b = crate::capture::bounds_at((10, 10)).unwrap();
+        let path = std::env::temp_dir().join("kliksnap-record-sound.mp4");
+        let _ = std::fs::remove_file(&path);
+        let audio = Audio {
+            system: true,
+            mic: false,
+        };
+        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        rec.stop().unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > 1000);
     }
 
     /// Like `records_an_mp4`, for a GIF. Run with `cargo test -- --ignored`.
@@ -733,7 +1059,7 @@ mod tests {
         let b = crate::capture::bounds_at((10, 10)).unwrap();
         let path = std::env::temp_dir().join("kliksnap-record-test.gif");
         let _ = std::fs::remove_file(&path);
-        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path).unwrap();
+        let rec = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path, Audio::default()).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
         let len = std::fs::metadata(&path).unwrap().len();

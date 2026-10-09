@@ -39,6 +39,10 @@ pub struct Settings {
     pub record_countdown: u32,
     /// Recordings are scaled to this percentage of the screen's pixels.
     pub record_scale: u32,
+    /// MP4 recordings carry what the computer plays (macOS 13+).
+    pub record_system_audio: bool,
+    /// MP4 recordings carry the microphone (macOS 15+).
+    pub record_mic: bool,
     /// How many recent captures History keeps; 0 keeps none.
     pub history_limit: u32,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
@@ -73,6 +77,8 @@ impl Default for Settings {
             file_template: crate::output::DEFAULT_TEMPLATE.into(),
             record_countdown: 3,
             record_scale: 100,
+            record_system_audio: false,
+            record_mic: false,
             preview_secs: 6,
             history_limit: 50,
             live_selection: true,
