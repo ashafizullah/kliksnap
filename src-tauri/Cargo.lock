@@ -2144,6 +2144,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -2428,6 +2430,7 @@ dependencies = [
  "block2",
  "chrono",
  "dispatch2",
+ "image",
  "objc2",
  "objc2-av-foundation",
  "objc2-core-foundation",

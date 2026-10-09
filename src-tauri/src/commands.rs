@@ -290,9 +290,9 @@ pub async fn save_shot(
 
 /// Saves into the folder from Settings; returns the file's path.
 fn save_to_folder(app: &AppHandle, img: &RgbaImage) -> Result<String, String> {
-    let dir = app.state::<AppState>().settings().save_dir(app);
-    let path = output::unique_path(&dir, &output::file_name());
-    output::save_png(img, &path)?;
+    let s = app.state::<AppState>().settings();
+    let path = output::unique_path(&s.save_dir(app), &s.file_name());
+    output::save(img, &path, s.format())?;
     Ok(path.display().to_string())
 }
 
@@ -425,12 +425,14 @@ pub async fn export_image(
     let img =
         RgbaImage::from_raw(meta.width, meta.height, bytes.clone()).ok_or("image size mismatch")?;
     let state = app.state::<AppState>();
-    let dir = state.settings().save_dir(&app);
+    let s = state.settings();
+    let dir = s.save_dir(&app);
+    let mut format = s.format();
     let path = match meta.action.as_str() {
         "copy" => return output::copy(&img).map(|_| None),
         "share" => {
             let path = share_file(&app)?;
-            output::save_png(&img, &path)?;
+            output::save(&img, &path, format)?;
             let [x, y, w, h] = meta.anchor.unwrap_or_default();
             return platform::share(&window, &path, (x, y, w, h)).map(|_| None);
         }
@@ -453,31 +455,42 @@ pub async fn export_image(
             });
             return open_pin(&app, id).map(|_| None);
         }
-        "save" => output::unique_path(&dir, &output::file_name()),
+        "save" => output::unique_path(&dir, &s.file_name()),
         "savecopy" => {
             output::copy(&img)?;
-            output::unique_path(&dir, &output::file_name())
+            output::unique_path(&dir, &s.file_name())
         }
         "saveas" => {
-            let Some(picked) = app
-                .dialog()
-                .file()
+            let (png, jpg) = (("PNG image", ["png"]), ("JPEG image", ["jpg"]));
+            let filters = if format == output::Format::Png {
+                [png, jpg]
+            } else {
+                [jpg, png]
+            };
+            let Some(picked) = filters
+                .iter()
+                .fold(app.dialog().file(), |d, (name, ext)| {
+                    d.add_filter(*name, ext)
+                })
                 .set_directory(&dir)
-                .set_file_name(output::file_name())
-                .add_filter("PNG image", &["png"])
+                .set_file_name(s.file_name())
                 .blocking_save_file()
             else {
                 return Ok(None);
             };
             let mut path = picked.into_path().map_err(|e| e.to_string())?;
-            if path.extension().is_none() {
-                path.set_extension("png");
+            // The typed extension picks the format; without one, Settings does.
+            match output::Format::from_path(&path, s.jpg_quality) {
+                Some(f) => format = f,
+                None => {
+                    path.set_extension(format.ext());
+                }
             }
             path
         }
         other => return Err(format!("unknown action {other}")),
     };
-    output::save_png(&img, &path)?;
+    output::save(&img, &path, format)?;
     Ok(Some(path.display().to_string()))
 }
 
@@ -500,7 +513,14 @@ fn share_file(app: &AppHandle) -> Result<PathBuf, String> {
             }
         }
     }
-    Ok(output::unique_path(&dir, &output::file_name()))
+    let s = app.state::<AppState>().settings();
+    Ok(output::unique_path(&dir, &s.file_name()))
+}
+
+#[tauri::command]
+pub fn file_name_example(template: String, format: String) -> String {
+    let ext = if format == "jpg" { "jpg" } else { "png" };
+    output::file_name(&template, ext)
 }
 
 #[tauri::command]

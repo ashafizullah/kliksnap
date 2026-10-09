@@ -513,8 +513,8 @@ fn finish_shot(
         output::copy(&img)?;
     }
     if s.auto_save {
-        let path = output::unique_path(&s.save_dir(app), &output::file_name());
-        output::save_png(&img, &path)?;
+        let path = output::unique_path(&s.save_dir(app), &s.file_name());
+        output::save(&img, &path, s.format())?;
     }
     Ok(())
 }
@@ -641,6 +641,7 @@ pub fn run() {
             commands::reveal_toast_file,
             commands::export_image,
             commands::overlay_pick_color,
+            commands::file_name_example,
             commands::get_settings,
             commands::save_settings,
             commands::pick_folder,
