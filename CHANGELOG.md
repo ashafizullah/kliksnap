@@ -3,6 +3,15 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.8.0
+
+### New
+
+- Color picker: while selecting an area, the loupe shows the color under the crosshair. Press `C` to copy it as a hex code (`#RRGGBB`)
+- Editor background: put a screenshot on a gradient or solid backdrop, with padding, rounded corners and a shadow. Pick it from the background button in the toolbar; your last choice carries over to the next screenshot
+- Editor: freehand pen (`D`) and blur (`B`) tools
+- Save screenshots as PNG or JPG (with a quality setting), and name files from a template such as `shot-%H%M%S`: Settings → Capture → File. Save As follows the extension you type
+
 ## 0.7.0
 
 ### New

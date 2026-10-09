@@ -32,9 +32,11 @@
 - **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder; no audio yet
 - **Pin to screen**: keep a screenshot floating above your windows as a reference
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
-- **Annotate**: arrow, line, rectangle, ellipse, text, numbered steps, highlighter, pixelate (blur), crop, undo/redo
+- **Annotate**: arrow, line, rectangle, ellipse, pen, text, numbered steps, highlighter, blur, pixelate, crop, undo/redo
+- **Background**: place a screenshot on a gradient or solid backdrop with padding, rounded corners and a shadow
+- **Color picker**: press `C` while selecting to copy the color under the crosshair as hex
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr). If the selection holds a QR code, its content is copied instead
-- Copies to the clipboard automatically; optional auto-save to a folder
+- Copies to the clipboard automatically; optional auto-save to a folder as PNG or JPG, with a file name template
 - **Capture resolution**: Max, Medium (75%) or Low (50%) for smaller files
 - **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
@@ -68,7 +70,7 @@ On Windows you can also hide the tray icon in Settings; KlikSnap keeps running o
 
 On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` instead of the Snipping Tool.
 
-In area mode, press `Space` to switch to window mode and `Esc` to cancel. In the editor, use `A L R O T N H P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
+In area mode, press `Space` to switch to window mode, `C` to copy the color under the crosshair and `Esc` to cancel. In the editor, use `A L R O D T N H B P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
 
 A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%). Right-click it for Copy, Save and Annotate; double-click or press `Esc` to close it.
 
