@@ -16,8 +16,8 @@ jobs:
             args: --target universal-apple-darwin
           - platform: windows-latest
             args: ""
-          # The oldest supported runner, so the AppImage runs on older distros too.
-          - platform: ubuntu-22.04
+          # xcap needs PipeWire 1.0 headers, which 22.04 lacks.
+          - platform: ubuntu-24.04
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
