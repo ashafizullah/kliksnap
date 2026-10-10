@@ -2,6 +2,19 @@
 
 pub use imp::*;
 
+/// Feedback sounds, when Settings has them on.
+#[derive(Clone, Copy)]
+pub enum Sound {
+    /// A screenshot was taken.
+    Shutter,
+    /// Text or a QR code was copied.
+    Pop,
+}
+
+/// A single short pop. The macOS system Pop has a second one just after it.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static POP_WAV: &[u8] = include_bytes!("../sounds/pop.wav");
+
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ffi::c_void;
@@ -320,17 +333,24 @@ mod imp {
         }
     }
 
-    /// Plays the system's own screenshot sound.
-    pub fn play_shutter() {
-        const PATH: &str = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif";
+    /// Plays the system's own screenshot sound, or KlikSnap's pop.
+    pub fn play_sound(sound: super::Sound) {
+        const SHUTTER: &str = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif";
         let Some(class) = AnyClass::get(c"NSSound") else {
             return;
         };
-        let path = objc2_foundation::NSString::from_str(PATH);
         unsafe {
-            let sound: Allocated<AnyObject> = msg_send![class, alloc];
-            let sound: Option<Retained<AnyObject>> =
-                msg_send![sound, initWithContentsOfFile: &*path, byReference: true];
+            let alloc: Allocated<AnyObject> = msg_send![class, alloc];
+            let sound: Option<Retained<AnyObject>> = match sound {
+                super::Sound::Shutter => {
+                    let path = objc2_foundation::NSString::from_str(SHUTTER);
+                    msg_send![alloc, initWithContentsOfFile: &*path, byReference: true]
+                }
+                super::Sound::Pop => {
+                    let data = objc2_foundation::NSData::with_bytes(super::POP_WAV);
+                    msg_send![alloc, initWithData: &*data]
+                }
+            };
             // NSSound keeps itself alive while it plays.
             if let Some(sound) = sound {
                 let _: bool = msg_send![&*sound, play];
@@ -470,14 +490,18 @@ mod imp {
         None
     }
 
-    /// Windows has no screenshot sound of its own, so KlikSnap brings one.
-    pub fn play_shutter() {
+    /// Windows has no screenshot sound of its own, so KlikSnap brings its sounds.
+    pub fn play_sound(sound: super::Sound) {
         use windows::core::PCWSTR;
         use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
         static SHUTTER: &[u8] = include_bytes!("../sounds/shutter.wav");
+        let wav = match sound {
+            super::Sound::Shutter => SHUTTER,
+            super::Sound::Pop => super::POP_WAV,
+        };
         unsafe {
             let _ = PlaySoundW(
-                PCWSTR(SHUTTER.as_ptr().cast()),
+                PCWSTR(wav.as_ptr().cast()),
                 None,
                 SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
             );
@@ -515,16 +539,18 @@ mod imp {
     pub fn secs_since_scroll() -> Option<f64> {
         None
     }
-    /// The sound theme's camera shutter, through whichever player is installed.
-    pub fn play_shutter() {
+    /// The sound theme's sounds, through whichever player is installed.
+    pub fn play_sound(sound: super::Sound) {
         use std::process::{Command, Stdio};
-        std::thread::spawn(|| {
-            let players: [(&str, &[&str]); 2] = [
-                ("canberra-gtk-play", &["-i", "camera-shutter"]),
-                (
-                    "paplay",
-                    &["/usr/share/sounds/freedesktop/stereo/camera-shutter.oga"],
-                ),
+        let id = match sound {
+            super::Sound::Shutter => "camera-shutter",
+            super::Sound::Pop => "message",
+        };
+        std::thread::spawn(move || {
+            let file = format!("/usr/share/sounds/freedesktop/stereo/{id}.oga");
+            let players = [
+                ("canberra-gtk-play", vec!["-i", id]),
+                ("paplay", vec![file.as_str()]),
             ];
             for (cmd, args) in players {
                 let played = Command::new(cmd)

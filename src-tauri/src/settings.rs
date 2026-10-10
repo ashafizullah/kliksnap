@@ -26,7 +26,8 @@ pub struct Settings {
     pub save_dir: String,
     pub auto_copy: bool,
     pub auto_save: bool,
-    /// A camera shutter sounds when a screenshot is taken.
+    /// A camera shutter sounds when a screenshot is taken, a pop when text
+    /// or a QR code is copied.
     pub capture_sound: bool,
     /// Captures are scaled to this percentage of the screen's pixels (100 =
     /// full resolution; 50 on a Retina display gives its point size).
@@ -61,6 +62,8 @@ pub struct Settings {
     pub show_tray: bool,
     /// "auto" (the system's language), "en" or "id".
     pub language: String,
+    /// Copy Text reads with "system" (on-device) OCR or the "ai" profile in use.
+    pub ocr_mode: String,
     pub ai_profiles: Vec<crate::ai::Profile>,
     /// Index of the profile in use.
     pub ai_profile: usize,
@@ -97,6 +100,7 @@ impl Default for Settings {
             check_updates: true,
             show_tray: true,
             language: "auto".into(),
+            ocr_mode: "system".into(),
             ai_profiles: vec![crate::ai::Profile::openai()],
             ai_profile: 0,
         }

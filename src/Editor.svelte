@@ -361,7 +361,7 @@
   /** Exports the annotated image and closes the editor, unless Save As is cancelled. */
   let shareButton = $state<HTMLButtonElement>();
 
-  async function exportImage(action: "copy" | "save" | "saveas" | "savecopy" | "pin" | "share") {
+  async function exportImage(action: "copy" | "save" | "saveas" | "savecopy" | "pin" | "share" | "explain") {
     if (!base) return;
     if (text) commitText();
     try {
@@ -611,6 +611,8 @@
           {tr("Share")}
         </button>
       {/if}
+      <!-- Explains the image with its annotations, which can point the AI at what matters. -->
+      <button title={tr("Explain with AI")} onclick={() => exportImage("explain")}>{tr("Explain")}</button>
       <button title="{tr('Keep on screen')} ({mod}P)" onclick={() => exportImage("pin")}>{tr("Pin")}</button>
       <button title="{tr('Save As…')} ({mod}⇧S)" onclick={() => exportImage("saveas")}>{tr("Save As…")}</button>
       <button title="{tr('Save')} ({mod}S)" onclick={() => exportImage("save")}>{tr("Save")}</button>

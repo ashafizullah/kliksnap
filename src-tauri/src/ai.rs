@@ -96,6 +96,19 @@ impl Profile {
             .ok_or_else(|| tr("Not an OpenAI-compatible reply").into())
     }
 
+    /// The text in an image, as plain text in reading order.
+    pub async fn read_text(&self, png_base64: &str) -> Result<String, String> {
+        let text = self
+            .ask_about_image(
+                "Transcribe all the text in this image exactly as written, in reading \
+                 order, keeping line breaks. Output only the text: no commentary, no \
+                 Markdown, no code fences. If there is no text, output nothing.",
+                png_base64,
+            )
+            .await?;
+        Ok(strip_fence(&text).to_string())
+    }
+
     /// Checks the model answers and can read an image; returns its answer.
     pub async fn test(&self) -> Result<String, String> {
         self.ask_about_image(
@@ -158,6 +171,19 @@ fn describe(e: reqwest::Error) -> String {
     cause.to_string()
 }
 
+/// The inside of a ``` block, for models that wrap their answer in one anyway.
+fn strip_fence(text: &str) -> &str {
+    let t = text.trim();
+    let Some(inner) = t.strip_prefix("```").and_then(|t| t.strip_suffix("```")) else {
+        return t;
+    };
+    // Drop a language tag on the opening line.
+    inner
+        .split_once('\n')
+        .map_or(inner, |(_, body)| body)
+        .trim()
+}
+
 /// Whether a test answer shows the model saw the red image.
 pub fn saw_red(answer: &str) -> bool {
     answer.to_lowercase().contains("red")
@@ -185,6 +211,12 @@ mod tests {
             .unwrap();
         let img = image::load_from_memory(&png).unwrap();
         assert_eq!((img.width(), img.height()), (2048, 512));
+    }
+
+    #[test]
+    fn strip_fence_unwraps_code_blocks() {
+        assert_eq!(strip_fence("```text\nHello\nWorld\n```"), "Hello\nWorld");
+        assert_eq!(strip_fence("  Plain\ntext "), "Plain\ntext");
     }
 
     #[test]

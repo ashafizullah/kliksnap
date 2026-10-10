@@ -498,7 +498,8 @@ pub async fn export_image(
             let [x, y, w, h] = meta.anchor.unwrap_or_default();
             return platform::share(&window, &path, (x, y, w, h)).map(|_| None);
         }
-        "pin" => {
+        // The annotated image becomes a shot of its own; the new window holds it.
+        "pin" | "explain" => {
             let edited = state
                 .window_shots
                 .lock()
@@ -515,7 +516,12 @@ pub async fn export_image(
                 origin: None,
                 refs: 0,
             });
-            return open_pin(&app, id).map(|_| None);
+            return if meta.action == "pin" {
+                open_pin(&app, id)
+            } else {
+                open_explain(&app, id)
+            }
+            .map(|_| None);
         }
         "save" => output::unique_path(&dir, &s.file_name()),
         "savecopy" => {
@@ -534,6 +540,7 @@ pub async fn export_image(
                 .fold(app.dialog().file(), |d, (name, ext)| {
                     d.add_filter(*name, ext)
                 })
+                .set_parent(&window)
                 .set_directory(&dir)
                 .set_file_name(s.file_name())
                 .blocking_save_file()
@@ -702,18 +709,20 @@ pub fn save_settings(
 /// Opens an AI explanation of a shot in its own window, in place of the preview.
 /// Async for the same reason as `edit_shot`.
 #[tauri::command]
-pub async fn explain_shot(
-    app: AppHandle,
-    id: u32,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let (_, bounds) = state.shot(id).ok_or("screenshot expired")?;
-    let label = ui::open_explain(&app, id, &bounds).map_err(|e| e.to_string())?;
-    state.retain(id);
-    state.window_shots.lock().unwrap().insert(label, id);
+pub async fn explain_shot(app: AppHandle, id: u32) -> Result<(), String> {
+    open_explain(&app, id)?;
     if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
         let _ = preview.destroy();
     }
+    Ok(())
+}
+
+fn open_explain(app: &AppHandle, id: u32) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (_, bounds) = state.shot(id).ok_or("screenshot expired")?;
+    let label = ui::open_explain(app, id, &bounds).map_err(|e| e.to_string())?;
+    state.retain(id);
+    state.window_shots.lock().unwrap().insert(label, id);
     Ok(())
 }
 

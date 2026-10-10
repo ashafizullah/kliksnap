@@ -183,6 +183,9 @@ pub fn show_preview(app: &AppHandle, id: u32, b: &Bounds, secs: u32) -> tauri::R
         .focused(false)
         .accept_first_mouse(true)
         .visible_on_all_workspaces(true)
+        // Transparent with no system shadow, so the page draws a rounded card.
+        .transparent(true)
+        .shadow(false)
         .inner_size(PREVIEW_W, PREVIEW_H)
         .visible(false)
         .build()?;
@@ -266,6 +269,9 @@ pub fn show_toast(app: &AppHandle, b: &Bounds, tall: bool) -> tauri::Result<()> 
         .skip_taskbar(true)
         .focused(false)
         .visible_on_all_workspaces(true)
+        // Like the preview: the page draws a rounded card.
+        .transparent(true)
+        .shadow(false)
         .inner_size(TOAST_W, h)
         .visible(false)
         .build()?;
@@ -446,13 +452,15 @@ pub fn open_editor(
     let (max_w, max_h) = area.logical_size();
     const TOOLBAR: f64 = 52.0;
     // Wide enough for the toolbar on one row, never larger than the screen.
-    let w = (img_w as f64 / b.scale + 48.0).max(920.0).min(max_w * 0.9);
+    let w = (img_w as f64 / b.scale + 48.0).max(1000.0).min(max_w * 0.9);
     let h = (img_h as f64 / b.scale + TOOLBAR + 48.0)
         .max(400.0)
         .min(max_h * 0.9);
     let url = format!("editor.html?id={id}");
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("KlikSnap")
+        // Like Settings: stays beside the app you're annotating for.
+        .always_on_top(true)
         .inner_size(w, h)
         .min_inner_size(640.0, 360.0)
         .visible(false)

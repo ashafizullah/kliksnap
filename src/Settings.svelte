@@ -33,6 +33,7 @@
     check_updates: boolean;
     show_tray: boolean;
     language: "auto" | "en" | "id";
+    ocr_mode: "system" | "ai";
     ai_profiles: AiProfile[];
     ai_profile: number;
   };
@@ -354,7 +355,7 @@
             <input type="checkbox" bind:checked={s.auto_save} onchange={save} />
           </label>
           <label class="row">
-            <span>{tr("Play shutter sound")}</span>
+            <span>{tr("Sound effects")}</span>
             <input type="checkbox" bind:checked={s.capture_sound} onchange={save} />
           </label>
           <label class="row">
@@ -381,6 +382,29 @@
               <option value={0}>{tr("Never")}</option>
             </select>
           </label>
+        </section>
+
+        <section>
+          <h2>{tr("Copy Text (OCR)")}</h2>
+          <label class="row">
+            <span>{tr("Read text with")}</span>
+            <select bind:value={s.ocr_mode} onchange={save}>
+              <option value="system">{tr("This device")}</option>
+              <option value="ai" disabled={!aiReady}>{tr("AI")}</option>
+            </select>
+          </label>
+          <p class="hint" class:error={s.ocr_mode === "ai" && !aiReady}>
+            {#if !aiReady}
+              {s.ocr_mode === "ai"
+                ? tr("The AI profile in use isn't set up, so this device reads the text.")
+                : tr("Set up an AI model in the AI tab to read text with AI.")}
+              <button class="link" onclick={() => selectTab("ai")}>{tr("Open AI tab")}</button>
+            {:else if s.ocr_mode === "ai"}
+              {tr("Sent to {name}. Better with handwriting, tables and mixed languages; needs the internet. If it fails, this device reads the text.", { name: ai?.name.trim() || tr("Untitled") })}
+            {:else}
+              {tr("Private and offline; QR codes are always read on this device.")}
+            {/if}
+          </p>
         </section>
 
         <section>
@@ -650,6 +674,16 @@
     letter-spacing: 0.04em;
     color: var(--muted);
     margin: 10px 0 4px;
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+  }
+  .link:hover {
+    text-decoration: underline;
   }
   .controls {
     display: flex;

@@ -117,6 +117,12 @@ const ID: &[(&str, &str)] = &[
     ),
     ("Already checking…", "Sedang memeriksa…"),
     // AI model
+    ("Reading text with AI…", "Membaca teks dengan AI…"),
+    ("Text copied by AI", "Teks disalin oleh AI"),
+    (
+        "AI failed; text copied with on-device OCR",
+        "AI gagal; teks disalin dengan OCR perangkat",
+    ),
     (
         "Set up an AI model in Settings first.",
         "Atur dulu model AI di Settings.",

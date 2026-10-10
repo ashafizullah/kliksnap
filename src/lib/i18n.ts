@@ -210,6 +210,17 @@ const ID: Record<string, string> = {
   "Testing…": "Mengetes…",
   Test: "Tes",
   Explain: "Jelaskan",
+  "Copy Text (OCR)": "Salin Teks (OCR)",
+  "Read text with": "Baca teks dengan",
+  "This device": "Perangkat ini",
+  "The AI profile in use isn't set up, so this device reads the text.":
+    "Profil AI yang dipakai belum diatur, jadi teks dibaca oleh perangkat ini.",
+  "Set up an AI model in the AI tab to read text with AI.": "Atur model AI di tab AI untuk membaca teks dengan AI.",
+  "Open AI tab": "Buka tab AI",
+  "Sent to {name}. Better with handwriting, tables and mixed languages; needs the internet. If it fails, this device reads the text.":
+    "Dikirim ke {name}. Lebih bagus untuk tulisan tangan, tabel, dan campuran bahasa; butuh internet. Kalau gagal, teks dibaca oleh perangkat ini.",
+  "Private and offline; QR codes are always read on this device.":
+    "Privat dan offline; kode QR selalu dibaca di perangkat ini.",
   Profile: "Profil",
   Name: "Nama",
   "Profile {n}": "Profil {n}",
@@ -220,7 +231,7 @@ const ID: Record<string, string> = {
   "Thinking…": "Sedang berpikir…",
   "AI Settings": "Setelan AI",
   "Ask Again": "Tanya Lagi",
-  "Play shutter sound": "Bunyikan suara kamera",
+  "Sound effects": "Efek suara",
   "Save to folder": "Simpan ke folder",
   Resolution: "Resolusi",
   "Max (100%)": "Maks (100%)",
