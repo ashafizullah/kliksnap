@@ -220,6 +220,7 @@ const ID: Record<string, string> = {
   "Thinking…": "Sedang berpikir…",
   "AI Settings": "Setelan AI",
   "Ask Again": "Tanya Lagi",
+  "Play shutter sound": "Bunyikan suara kamera",
   "Save to folder": "Simpan ke folder",
   Resolution: "Resolusi",
   "Max (100%)": "Maks (100%)",

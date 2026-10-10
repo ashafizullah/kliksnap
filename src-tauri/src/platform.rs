@@ -319,6 +319,22 @@ mod imp {
                 unsafe { msg_send![&*app, activateWithOptions: ACTIVATE_IGNORING_OTHER_APPS] };
         }
     }
+
+    /// Plays the system's own screenshot sound.
+    pub fn play_shutter() {
+        const PATH: &str = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif";
+        let Some(class) = AnyClass::get(c"NSSound") else { return };
+        let path = objc2_foundation::NSString::from_str(PATH);
+        unsafe {
+            let sound: Allocated<AnyObject> = msg_send![class, alloc];
+            let sound: Option<Retained<AnyObject>> =
+                msg_send![sound, initWithContentsOfFile: &*path, byReference: true];
+            // NSSound keeps itself alive while it plays.
+            if let Some(sound) = sound {
+                let _: bool = msg_send![&*sound, play];
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -451,6 +467,20 @@ mod imp {
     pub fn secs_since_scroll() -> Option<f64> {
         None
     }
+
+    /// Windows has no screenshot sound of its own, so KlikSnap brings one.
+    pub fn play_shutter() {
+        use windows::core::PCWSTR;
+        use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+        static SHUTTER: &[u8] = include_bytes!("../sounds/shutter.wav");
+        unsafe {
+            let _ = PlaySoundW(
+                PCWSTR(SHUTTER.as_ptr().cast()),
+                None,
+                SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+            );
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -482,6 +512,27 @@ mod imp {
     pub fn restore_frontmost() {}
     pub fn secs_since_scroll() -> Option<f64> {
         None
+    }
+    /// The sound theme's camera shutter, through whichever player is installed.
+    pub fn play_shutter() {
+        use std::process::{Command, Stdio};
+        std::thread::spawn(|| {
+            let players: [(&str, &[&str]); 2] = [
+                ("canberra-gtk-play", &["-i", "camera-shutter"]),
+                ("paplay", &["/usr/share/sounds/freedesktop/stereo/camera-shutter.oga"]),
+            ];
+            for (cmd, args) in players {
+                let played = Command::new(cmd)
+                    .args(args)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success());
+                if played {
+                    break;
+                }
+            }
+        });
     }
     pub fn share(
         _win: &WebviewWindow,

@@ -646,6 +646,9 @@ fn finish_shot(
     reveal_previews(app);
     let state = app.state::<AppState>();
     let s = state.settings();
+    if s.capture_sound {
+        let _ = app.run_on_main_thread(platform::play_shutter);
+    }
     let (img, k) = capture::downscale(img, s.capture_scale);
     // Annotation sizes, the editor and pins go by pixels per point.
     let bounds = Bounds {
