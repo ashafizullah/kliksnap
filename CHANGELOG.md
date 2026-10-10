@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.10.1
+
+### Improved
+
+- macOS: KlikSnap is now signed and notarized by Apple, so the DMG opens without a Gatekeeper warning and permissions stay granted across future updates. After this update, macOS asks once more for Screen Recording (and Accessibility or Microphone if you use them): allow them again in System Settings → Privacy & Security
+
 ## 0.10.0
 
 ### New
