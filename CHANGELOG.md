@@ -3,6 +3,19 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.11.0
+
+### New
+
+- Ask AI about a screenshot: set up any OpenAI-compatible model with your own API key in Settings → AI (OpenAI, OpenRouter, Groq, Ollama and others; the model must read images). Press Explain in the preview or the editor, then Translate, Summarize, turn a table into CSV, or ask follow-up questions. Add your own actions, keep several AI profiles and pick the language the AI answers in
+- Copy Text can read with AI instead of on-device OCR: Settings → Capture → Read text with. Better with handwriting, tables and mixed languages; if the AI fails, on-device OCR takes over
+- Sound effects: a camera shutter for screenshots and a soft pop when text is copied. Turn them off in Settings → Capture
+
+### Improved
+
+- Settings, History, the editor and the AI window stay on top, so they don't vanish behind the app you switch to
+- The preview and notices are rounded cards with a border that shows on light and dark screens
+
 ## 0.10.1
 
 ### Improved

@@ -40,6 +40,8 @@
 - **Color picker**: press `C` while selecting to copy the color under the crosshair as hex
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr; Tesseract on Linux). If the selection holds a QR code, its content is copied instead
 - Copies to the clipboard automatically; optional auto-save to a folder as PNG or JPG, with a file name template
+- **Ask AI** about a screenshot with your own OpenAI-compatible model (OpenAI, OpenRouter, Groq, Ollama…): explain it, translate it, summarize it, turn a table into CSV, ask follow-ups, or add your own actions. Copy Text can read with AI too
+- **Sound effects**: a camera shutter for screenshots and a pop when text is copied (can be turned off)
 - **History**: recent captures, searchable by the text in them, to copy, edit, pin or save again
 - **Capture resolution**: Max, Medium (75%) or Low (50%) for smaller files
 - **English and Bahasa Indonesia**, following the system language or your choice in Settings
