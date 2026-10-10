@@ -2523,9 +2523,10 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kliksnap"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "block2",
  "chrono",
  "cpal",
@@ -2539,7 +2540,9 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation",
  "objc2-screen-capture-kit",
+ "reqwest",
  "rqrr",
+ "rustls",
  "serde",
  "serde_json",
  "sys-locale",

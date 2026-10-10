@@ -183,6 +183,9 @@ pub fn show_preview(app: &AppHandle, id: u32, b: &Bounds, secs: u32) -> tauri::R
         .focused(false)
         .accept_first_mouse(true)
         .visible_on_all_workspaces(true)
+        // Transparent with no system shadow, so the page draws a rounded card.
+        .transparent(true)
+        .shadow(false)
         .inner_size(PREVIEW_W, PREVIEW_H)
         .visible(false)
         .build()?;
@@ -266,6 +269,9 @@ pub fn show_toast(app: &AppHandle, b: &Bounds, tall: bool) -> tauri::Result<()> 
         .skip_taskbar(true)
         .focused(false)
         .visible_on_all_workspaces(true)
+        // Like the preview: the page draws a rounded card.
+        .transparent(true)
+        .shadow(false)
         .inner_size(TOAST_W, h)
         .visible(false)
         .build()?;
@@ -446,13 +452,15 @@ pub fn open_editor(
     let (max_w, max_h) = area.logical_size();
     const TOOLBAR: f64 = 52.0;
     // Wide enough for the toolbar on one row, never larger than the screen.
-    let w = (img_w as f64 / b.scale + 48.0).max(920.0).min(max_w * 0.9);
+    let w = (img_w as f64 / b.scale + 48.0).max(1000.0).min(max_w * 0.9);
     let h = (img_h as f64 / b.scale + TOOLBAR + 48.0)
         .max(400.0)
         .min(max_h * 0.9);
     let url = format!("editor.html?id={id}");
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("KlikSnap")
+        // Like Settings: stays beside the app you're annotating for.
+        .always_on_top(true)
         .inner_size(w, h)
         .min_inner_size(640.0, 360.0)
         .visible(false)
@@ -487,6 +495,8 @@ pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "history", WebviewUrl::App("history.html".into()))
         .title("KlikSnap History")
+        // Like Settings: stays beside the app you paste an old capture into.
+        .always_on_top(true)
         .inner_size(820.0, 600.0)
         .min_inner_size(480.0, 360.0)
         .center()
@@ -495,13 +505,50 @@ pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Opens an AI explanation of a shot, centered on its screen. Returns the window label.
+pub fn open_explain(app: &AppHandle, id: u32, b: &Bounds) -> tauri::Result<String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!(
+        "explain-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let area = work_area(app, b);
+    let (_, max_h) = area.logical_size();
+    let (w, h) = (520.0, (max_h * 0.8).min(640.0));
+    let url = format!("explain.html?id={id}");
+    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("KlikSnap AI")
+        // Like Settings: stays beside whatever you're fixing from the answer.
+        .always_on_top(true)
+        .inner_size(w, h)
+        .min_inner_size(360.0, 320.0)
+        .visible(false)
+        .build()?;
+    let x = area.x + (area.w - area.n(w)) / 2.0;
+    let y = area.y + (area.h - area.n(h)) / 2.0;
+    place(&win, &area, x, y, w, h);
+    Ok(label)
+}
+
 pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
+    open_settings_tab(app, "general")
+}
+
+/// Opens Settings on a tab, or switches the open window to it.
+pub fn open_settings_tab(app: &AppHandle, tab: &str) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("settings") {
+        if tab != "general" {
+            win.emit("settings:tab", tab)?;
+        }
         win.show()?;
         return win.set_focus();
     }
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let url = format!("settings.html?tab={tab}");
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("KlikSnap Settings")
+        // Stays visible while you fetch something from another app, such as
+        // an API key: KlikSnap has no Dock icon or ⌘Tab entry to bring it back.
+        .always_on_top(true)
         .inner_size(460.0, 560.0)
         .resizable(false)
         .maximizable(false)

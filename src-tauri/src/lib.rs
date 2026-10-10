@@ -1,3 +1,4 @@
+mod ai;
 #[cfg(any(target_os = "windows", test))]
 mod audio_mix;
 mod capture;
@@ -342,9 +343,9 @@ fn finish_text(
         })
     };
     let (title, result) = if codes.is_empty() {
-        (i18n::tr("Text copied"), ocr::recognize(img))
+        read_text(app, img, bounds)
     } else {
-        (i18n::tr("QR code copied"), Ok(codes.join("\n")))
+        (i18n::tr("QR code copied").into(), Ok(codes.join("\n")))
     };
     let toast = match result {
         Ok(text) if text.trim().is_empty() => Toast {
@@ -355,8 +356,11 @@ fn finish_text(
             arboard::Clipboard::new()
                 .and_then(|mut c| c.set_text(text.clone()))
                 .map_err(|e| e.to_string())?;
+            if app.state::<AppState>().settings().capture_sound {
+                let _ = app.run_on_main_thread(|| platform::play_sound(platform::Sound::Pop));
+            }
             Toast {
-                title: title.into(),
+                title,
                 text,
                 ..Default::default()
             }
@@ -367,6 +371,38 @@ fn finish_text(
         },
     };
     show_toast(app, toast, bounds)
+}
+
+/// The text in `img`, with the AI profile in use when Settings asks for it and
+/// it is set up, else on-device; and the toast's title. A failed AI read falls
+/// back to on-device OCR and says so.
+fn read_text(
+    app: &AppHandle,
+    img: &RgbaImage,
+    bounds: &Bounds,
+) -> (String, Result<String, String>) {
+    let s = app.state::<AppState>().settings();
+    let ai = s.ai(None).filter(|p| s.ocr_mode == "ai" && p.is_set_up());
+    let Some(ai) = ai else {
+        return (i18n::tr("Text copied").into(), ocr::recognize(img));
+    };
+    // The model takes seconds: say it's working.
+    let busy = Toast {
+        title: i18n::tr("Reading text with AI…").into(),
+        ..Default::default()
+    };
+    let _ = show_toast(app, busy, bounds);
+    let read = ai::encode(img).and_then(|png| tauri::async_runtime::block_on(ai.read_text(&png)));
+    match read {
+        Ok(text) => (i18n::tr("Text copied by AI").into(), Ok(text)),
+        Err(e) => (
+            format!(
+                "{} ({e})",
+                i18n::tr("AI failed; text copied with on-device OCR")
+            ),
+            ocr::recognize(img),
+        ),
+    }
 }
 
 /// Closes the selection and copies the color the user picked from the loupe.
@@ -645,6 +681,9 @@ fn finish_shot(
     reveal_previews(app);
     let state = app.state::<AppState>();
     let s = state.settings();
+    if s.capture_sound {
+        let _ = app.run_on_main_thread(|| platform::play_sound(platform::Sound::Shutter));
+    }
     let (img, k) = capture::downscale(img, s.capture_scale);
     // Annotation sizes, the editor and pins go by pixels per point.
     let bounds = Bounds {
@@ -783,7 +822,10 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
         if let Some((_, bounds)) = previews.last().and_then(|&newest| state.shot(newest)) {
             ui::stack_previews(app, &previews, &bounds);
         }
-    } else if label.starts_with("editor-") || label.starts_with("pin-") {
+    } else if ["editor-", "pin-", "explain-"]
+        .iter()
+        .any(|p| label.starts_with(p))
+    {
         if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
         }
@@ -896,6 +938,11 @@ pub fn run() {
             commands::capture,
             commands::toast_text,
             commands::check_updates,
+            commands::test_ai,
+            commands::explain_shot,
+            commands::ai_chat,
+            commands::ai_info,
+            commands::open_ai_settings,
             commands::update_info,
             commands::update_install,
             commands::update_notes,

@@ -40,6 +40,7 @@
   });
   const edit = () => invoke("edit_shot", { id });
   const pin = () => invoke("pin_shot", { id }).catch((e) => flash(String(e)));
+  const explain = () => invoke("explain_shot", { id }).catch((e) => flash(String(e)));
 
   function setHover(on: boolean) {
     if (on === hovering) return;
@@ -78,7 +79,10 @@
     <button class="close" title={tr("Close")} aria-label={tr("Close")} onclick={closeWindow}>
       <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
     </button>
-    <button class="edit" onclick={edit}>{tr("Annotate")}</button>
+    <div class="row top">
+      <button class="edit" onclick={edit}>{tr("Annotate")}</button>
+      <button class="edit" title={tr("Explain with AI")} onclick={explain}>{tr("Explain")}</button>
+    </div>
     <div class="row">
       <button onclick={copy}>{tr("Copy")}</button>
       <button onclick={save}>{tr("Save")}</button>
@@ -93,14 +97,20 @@
 </div>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #111;
+    background: transparent;
   }
+  /* Inset a pixel so the dark outer ring isn't clipped by the window edge:
+     the light border shows on dark screens, the dark ring on light ones. */
   .card {
     position: fixed;
-    inset: 0;
+    inset: 1px;
     overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 12px;
     background: #111;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   }
   img {
     width: 100%;
@@ -152,6 +162,13 @@
   }
   .row button {
     min-width: 62px;
+  }
+  .top button {
+    flex: 1;
+    min-width: 0;
+  }
+  .top {
+    width: 202px;
   }
   .close {
     position: absolute;

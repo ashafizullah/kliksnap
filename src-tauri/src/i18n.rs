@@ -116,6 +116,30 @@ const ID: &[(&str, &str)] = &[
         "Sudah terbaru: {version} adalah versi terakhir.",
     ),
     ("Already checking…", "Sedang memeriksa…"),
+    // AI model
+    ("Reading text with AI…", "Membaca teks dengan AI…"),
+    ("Text copied by AI", "Teks disalin oleh AI"),
+    (
+        "AI failed; text copied with on-device OCR",
+        "AI gagal; teks disalin dengan OCR perangkat",
+    ),
+    (
+        "Set up an AI model in Settings first.",
+        "Atur dulu model AI di Settings.",
+    ),
+    (
+        "Fill in the base URL and the model first.",
+        "Isi dulu base URL dan modelnya.",
+    ),
+    ("Not an OpenAI-compatible reply", "Balasan bukan format OpenAI-compatible"),
+    (
+        "Connected. The model read the test image: \"{answer}\"",
+        "Terhubung. Model bisa membaca gambar uji: \"{answer}\"",
+    ),
+    (
+        "Connected, but the model answered \"{answer}\" about a red test image. It may not read images.",
+        "Terhubung, tapi model menjawab \"{answer}\" untuk gambar uji merah. Kemungkinan model ini tidak bisa membaca gambar.",
+    ),
 ];
 
 #[cfg(test)]

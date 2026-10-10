@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { invoke, isLinux, isMac, isWindows, ready } from "./lib/api";
+  import { listen } from "@tauri-apps/api/event";
+  import { invoke, isLinux, isMac, isWindows, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
+  import { LANGUAGES } from "./lib/languages";
 
   type Settings = {
     hotkey_area: string;
@@ -15,6 +17,7 @@
     save_dir: string;
     auto_copy: boolean;
     auto_save: boolean;
+    capture_sound: boolean;
     capture_scale: number;
     image_format: "png" | "jpg";
     jpg_quality: number;
@@ -31,7 +34,14 @@
     check_updates: boolean;
     show_tray: boolean;
     language: "auto" | "en" | "id";
+    ocr_mode: "system" | "ai";
+    ai_profiles: AiProfile[];
+    ai_profile: number;
+    ai_language: string;
+    ai_actions: AiAction[];
   };
+  type AiAction = { name: string; prompt: string };
+  type AiProfile = { name: string; base_url: string; api_key: string; model: string };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
@@ -44,14 +54,17 @@
     { field: "hotkey_scroll", label: "Scrolling capture" },
   ];
 
-  type Tab = "general" | "capture" | "recording" | "shortcuts";
+  type Tab = "general" | "capture" | "recording" | "shortcuts" | "ai";
   const TABS: { id: Tab; label: string }[] = [
     { id: "general", label: "General" },
     { id: "capture", label: "Capture" },
     { id: "recording", label: "Recording" },
     { id: "shortcuts", label: "Shortcuts" },
+    { id: "ai", label: "AI" },
   ];
-  let tab = $state<Tab>("general");
+  const isTab = (id: string | null): id is Tab => TABS.some((t) => t.id === id);
+  const initialTab = param("tab");
+  let tab = $state<Tab>(isTab(initialTab) ? initialTab : "general");
 
   function selectTab(id: Tab) {
     recording = null;
@@ -90,6 +103,69 @@
     }
   }
 
+  let testing = $state(false);
+  let aiStatus = $state<{ text: string; failed: boolean } | null>(null);
+
+  const ai = $derived(s?.ai_profiles[s.ai_profile]);
+  const aiReady = $derived(!!ai?.base_url.trim() && !!ai?.model.trim());
+
+  function selectProfile() {
+    aiStatus = null;
+    save();
+  }
+
+  function addProfile() {
+    if (!s) return;
+    s.ai_profiles.push({
+      name: tr("Profile {n}", { n: s.ai_profiles.length + 1 }),
+      base_url: "https://api.openai.com/v1",
+      api_key: "",
+      model: "",
+    });
+    s.ai_profile = s.ai_profiles.length - 1;
+    selectProfile();
+  }
+
+  function addAction() {
+    if (!s) return;
+    s.ai_actions.push({ name: "", prompt: "" });
+  }
+
+  function deleteAction(i: number) {
+    if (!s || s.ai_actions.length < 2) return;
+    s.ai_actions.splice(i, 1);
+    save();
+  }
+
+  /** Back to the presets: Rust fills an empty list in. */
+  async function resetActions() {
+    if (!s) return;
+    s.ai_actions = [];
+    await save();
+    s = await invoke<Settings>("get_settings");
+  }
+
+  function deleteProfile() {
+    if (!s || s.ai_profiles.length < 2) return;
+    s.ai_profiles.splice(s.ai_profile, 1);
+    s.ai_profile = Math.min(s.ai_profile, s.ai_profiles.length - 1);
+    selectProfile();
+  }
+
+  async function testAi() {
+    if (!ai) return;
+    testing = true;
+    aiStatus = null;
+    try {
+      const text = await invoke<string>("test_ai", { profile: $state.snapshot(ai) });
+      aiStatus = { text, failed: false };
+    } catch (e) {
+      aiStatus = { text: String(e), failed: true };
+    } finally {
+      testing = false;
+    }
+  }
+
   // What the next screenshot will be called, filled in by the Rust side.
   let example = $state("");
   $effect(() => {
@@ -106,6 +182,14 @@
   async function setLanguage() {
     await save();
     location.reload();
+  }
+
+  // Text that may be pasted and the window closed at once, before a change
+  // event: an API key, say. Saved shortly after typing stops instead.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  function saveSoon() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 400);
   }
 
   async function save() {
@@ -174,10 +258,17 @@
     }
   }
 
-  onMount(async () => {
-    [s, version] = await Promise.all([invoke<Settings>("get_settings"), invoke<string>("app_version")]);
-    await tick();
-    ready();
+  onMount(() => {
+    // Sent when something asks for a tab while Settings is already open.
+    const unlisten = listen<string>("settings:tab", (e) => {
+      if (isTab(e.payload)) selectTab(e.payload);
+    });
+    (async () => {
+      [s, version] = await Promise.all([invoke<Settings>("get_settings"), invoke<string>("app_version")]);
+      await tick();
+      ready();
+    })();
+    return () => unlisten.then((off) => off());
   });
 </script>
 
@@ -287,6 +378,10 @@
             <input type="checkbox" bind:checked={s.auto_save} onchange={save} />
           </label>
           <label class="row">
+            <span>{tr("Sound effects")}</span>
+            <input type="checkbox" bind:checked={s.capture_sound} onchange={save} />
+          </label>
+          <label class="row">
             <span>{tr("Resolution")}</span>
             <select bind:value={s.capture_scale} onchange={save}>
               <option value={100}>{tr("Max (100%)")}</option>
@@ -310,6 +405,29 @@
               <option value={0}>{tr("Never")}</option>
             </select>
           </label>
+        </section>
+
+        <section>
+          <h2>{tr("Copy Text (OCR)")}</h2>
+          <label class="row">
+            <span>{tr("Read text with")}</span>
+            <select bind:value={s.ocr_mode} onchange={save}>
+              <option value="system">{tr("This device")}</option>
+              <option value="ai" disabled={!aiReady}>{tr("AI")}</option>
+            </select>
+          </label>
+          <p class="hint" class:error={s.ocr_mode === "ai" && !aiReady}>
+            {#if !aiReady}
+              {s.ocr_mode === "ai"
+                ? tr("The AI profile in use isn't set up, so this device reads the text.")
+                : tr("Set up an AI model in the AI tab to read text with AI.")}
+              <button class="link" onclick={() => selectTab("ai")}>{tr("Open AI tab")}</button>
+            {:else if s.ocr_mode === "ai"}
+              {tr("Sent to {name}. Better with handwriting, tables and mixed languages; needs the internet. If it fails, this device reads the text.", { name: ai?.name.trim() || tr("Untitled") })}
+            {:else}
+              {tr("Private and offline; QR codes are always read on this device.")}
+            {/if}
+          </p>
         </section>
 
         <section>
@@ -415,6 +533,96 @@
                 )
               : tr("Both are mixed into one track. GIFs have no sound.")}
           </p>
+        </section>
+      {:else if tab === "ai"}
+        <section>
+          <h2>{tr("AI model")}</h2>
+          <p class="hint">{tr("Any OpenAI-compatible API, with your own key: OpenAI, OpenRouter, Groq, Ollama and others.")}</p>
+          <div class="row">
+            <span>{tr("Profile")}</span>
+            <div class="controls">
+              <select bind:value={s.ai_profile} onchange={selectProfile} aria-label={tr("Profile")}>
+                {#each s.ai_profiles as p, i (i)}
+                  <option value={i}>{p.name.trim() || tr("Untitled")}</option>
+                {/each}
+              </select>
+              <button class="secondary icon" title={tr("Add profile")} aria-label={tr("Add profile")} onclick={addProfile}>+</button>
+              <button
+                class="secondary icon"
+                title={tr("Delete profile")}
+                aria-label={tr("Delete profile")}
+                disabled={s.ai_profiles.length < 2}
+                onclick={deleteProfile}>−</button
+              >
+            </div>
+          </div>
+          {#if ai}
+            <label class="row">
+              <span>{tr("Name")}</span>
+              <input class="template" type="text" spellcheck="false" bind:value={ai.name} oninput={saveSoon} />
+            </label>
+            <label class="row">
+              <span>{tr("Base URL")}</span>
+              <input class="template" type="url" spellcheck="false" placeholder="https://api.openai.com/v1" bind:value={ai.base_url} oninput={saveSoon} />
+            </label>
+            <label class="row">
+              <span>{tr("API key")}</span>
+              <input class="template" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" bind:value={ai.api_key} oninput={saveSoon} />
+            </label>
+            <label class="row">
+              <span>{tr("Model")}</span>
+              <input class="template" type="text" spellcheck="false" placeholder="gpt-4o-mini" bind:value={ai.model} oninput={saveSoon} />
+            </label>
+          {/if}
+          <p class="hint">{tr("Make sure the model can read images (vision); KlikSnap sends it your screenshots.")}</p>
+          <div class="row">
+            <span>{tr("Check the model reads an image")}</span>
+            <button class="secondary" disabled={testing || !aiReady} onclick={testAi}>
+              {testing ? tr("Testing…") : tr("Test")}
+            </button>
+          </div>
+          {#if aiStatus}
+            <p class="hint" class:error={aiStatus.failed} role="status">{aiStatus.text}</p>
+          {/if}
+        </section>
+
+        <section>
+          <h2>{tr("Language")}</h2>
+          <label class="row">
+            <span>{tr("AI answers in")}</span>
+            <select bind:value={s.ai_language} onchange={save}>
+              <option value="">{tr("The app's language")}</option>
+              {#each LANGUAGES as l (l.en)}
+                <option value={l.en}>{l.native}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">{tr("Also what Translate translates into, unless you pick another language in the AI window.")}</p>
+        </section>
+
+        <section>
+          <h2>{tr("Actions")}</h2>
+          <p class="hint">{tr("Buttons in the AI window. Explain runs the first one. {language} becomes the language above, or one you pick in the AI window.")}</p>
+          {#each s.ai_actions as a, i (i)}
+            <div class="action">
+              <div class="controls">
+                <input class="template name" type="text" spellcheck="false" placeholder={tr("Name")} aria-label={tr("Name")} bind:value={a.name} oninput={saveSoon} />
+                <button
+                  class="secondary icon"
+                  title={tr("Delete action")}
+                  aria-label={tr("Delete action")}
+                  disabled={s.ai_actions.length < 2}
+                  onclick={() => deleteAction(i)}>−</button
+                >
+              </div>
+              <textarea rows="2" spellcheck="false" placeholder={tr("What to ask about the screenshot")} aria-label={tr("Prompt")} bind:value={a.prompt} oninput={saveSoon}
+              ></textarea>
+            </div>
+          {/each}
+          <div class="row">
+            <button class="secondary" onclick={resetActions}>{tr("Reset to presets")}</button>
+            <button class="secondary" onclick={addAction}>{tr("Add action")}</button>
+          </div>
         </section>
       {:else}
         <section>
@@ -528,6 +736,48 @@
     letter-spacing: 0.04em;
     color: var(--muted);
     margin: 10px 0 4px;
+  }
+  .link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+  }
+  .link:hover {
+    text-decoration: underline;
+  }
+  .action {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .action .name {
+    flex: 1;
+    width: auto;
+  }
+  .action textarea {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    resize: vertical;
+  }
+  .controls {
+    display: flex;
+    gap: 6px;
+  }
+  .secondary.icon {
+    min-width: 26px;
+    padding: 0;
+  }
+  .secondary:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .row {
     display: flex;

@@ -33,12 +33,18 @@
 </div>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #1c1c1e;
+    background: transparent;
   }
+  /* The preview's card: a light border for dark screens, a dark ring for light ones. */
   .toast {
     position: fixed;
-    inset: 0;
+    inset: 1px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 12px;
+    background: #1c1c1e;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
     /* Centered, so short and long notices both sit evenly in the window. */
     display: flex;
     flex-direction: column;

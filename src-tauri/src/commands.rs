@@ -498,7 +498,8 @@ pub async fn export_image(
             let [x, y, w, h] = meta.anchor.unwrap_or_default();
             return platform::share(&window, &path, (x, y, w, h)).map(|_| None);
         }
-        "pin" => {
+        // The annotated image becomes a shot of its own; the new window holds it.
+        "pin" | "explain" => {
             let edited = state
                 .window_shots
                 .lock()
@@ -515,7 +516,12 @@ pub async fn export_image(
                 origin: None,
                 refs: 0,
             });
-            return open_pin(&app, id).map(|_| None);
+            return if meta.action == "pin" {
+                open_pin(&app, id)
+            } else {
+                open_explain(&app, id)
+            }
+            .map(|_| None);
         }
         "save" => output::unique_path(&dir, &s.file_name()),
         "savecopy" => {
@@ -534,6 +540,7 @@ pub async fn export_image(
                 .fold(app.dialog().file(), |d, (name, ext)| {
                     d.add_filter(*name, ext)
                 })
+                .set_parent(&window)
                 .set_directory(&dir)
                 .set_file_name(s.file_name())
                 .blocking_save_file()
@@ -660,6 +667,7 @@ pub fn save_settings(
     settings: Settings,
     state: State<AppState>,
 ) -> Result<(), String> {
+    let settings = settings.normalize();
     let old = state.settings();
     let print_screen_changed = settings.print_screen != old.print_screen;
     if print_screen_changed {
@@ -698,11 +706,110 @@ pub fn save_settings(
     Ok(())
 }
 
+/// Opens an AI explanation of a shot in its own window, in place of the preview.
+/// Async for the same reason as `edit_shot`.
 #[tauri::command]
-pub async fn pick_folder(app: AppHandle) -> Option<String> {
+pub async fn explain_shot(app: AppHandle, id: u32) -> Result<(), String> {
+    open_explain(&app, id)?;
+    if let Some(preview) = app.get_webview_window(&ui::preview_label(id)) {
+        let _ = preview.destroy();
+    }
+    Ok(())
+}
+
+fn open_explain(app: &AppHandle, id: u32) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (_, bounds) = state.shot(id).ok_or("screenshot expired")?;
+    let label = ui::open_explain(app, id, &bounds).map_err(|e| e.to_string())?;
+    state.retain(id);
+    state.window_shots.lock().unwrap().insert(label, id);
+    Ok(())
+}
+
+/// Continues a conversation about a shot with an AI profile (the one in use
+/// when `profile` is None); returns the reply as Markdown.
+#[tauri::command]
+pub async fn ai_chat(
+    id: u32,
+    profile: Option<usize>,
+    turns: Vec<crate::ai::Turn>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    if turns.is_empty() {
+        return Err("nothing to ask".into());
+    }
+    let s = state.settings();
+    let ai = s
+        .ai(profile)
+        .filter(|p| p.is_set_up())
+        .cloned()
+        .ok_or(tr("Set up an AI model in Settings first."))?;
+    let img = shot_image(&state, id)?;
+    let png = tauri::async_runtime::spawn_blocking(move || crate::ai::encode(&img))
+        .await
+        .map_err(|e| e.to_string())??;
+    let system = crate::ai::system_prompt(&s.ai_language());
+    ai.chat(Some(&system), &png, &turns).await
+}
+
+#[derive(Serialize)]
+pub struct AiInfo {
+    profiles: Vec<String>,
+    active: usize,
+    /// `{language}` is left for the window, which lets you pick it.
+    actions: Vec<crate::ai::Action>,
+    /// The reply language from Settings, in English: the default for `{language}`.
+    language: String,
+}
+
+/// The AI profiles' names and the actions, for the AI window.
+#[tauri::command]
+pub fn ai_info(state: State<AppState>) -> AiInfo {
+    let s = state.settings();
+    let language = s.ai_language();
+    // One still being written in Settings has no prompt yet.
+    let mut actions: Vec<_> = s
+        .ai_actions
+        .into_iter()
+        .filter(|a| !a.prompt.trim().is_empty())
+        .collect();
+    if actions.is_empty() {
+        actions = crate::ai::Action::defaults();
+    }
+    AiInfo {
+        profiles: s.ai_profiles.into_iter().map(|p| p.name).collect(),
+        active: s.ai_profile,
+        actions,
+        language,
+    }
+}
+
+/// Opens Settings on its AI tab. Async: it may create a window.
+#[tauri::command]
+pub async fn open_ai_settings(app: AppHandle) -> Result<(), String> {
+    ui::open_settings_tab(&app, "ai").map_err(|e| e.to_string())
+}
+
+/// Sends a small red image to the model; Ok when it names the color.
+#[tauri::command]
+pub async fn test_ai(profile: crate::ai::Profile) -> Result<String, String> {
+    let answer = profile.test().await?;
+    if crate::ai::saw_red(&answer) {
+        Ok(tr("Connected. The model read the test image: \"{answer}\"")
+            .replace("{answer}", &answer))
+    } else {
+        Err(tr("Connected, but the model answered \"{answer}\" about a red test image. It may not read images.")
+            .replace("{answer}", &answer))
+    }
+}
+
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle, window: WebviewWindow) -> Option<String> {
+    // Attached to Settings, which floats above a free-standing dialog.
     let picked: PathBuf = app
         .dialog()
         .file()
+        .set_parent(&window)
         .blocking_pick_folder()?
         .into_path()
         .ok()?;

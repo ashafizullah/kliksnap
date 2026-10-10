@@ -4,10 +4,9 @@
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { closeWindow, invoke, isMac, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
+  import Markdown from "./lib/Markdown.svelte";
 
   type Info = { version: string; current: string; notes: string; url: string };
-  type Block = { kind: "h" | "li" | "p"; parts: Part[] };
-  type Part = { text: string; code?: boolean; bold?: boolean; em?: boolean };
 
   let info = $state<Info | null>(null);
   let expanded = $state(false);
@@ -17,36 +16,6 @@
   let progress = $state<{ downloaded: number; total: number | null } | null>(null);
   let error = $state("");
 
-  /** Just enough markdown for release notes: headings, list items, paragraphs, bold, italics and code. */
-  function parse(md: string): Block[] {
-    const blocks: Block[] = [];
-    for (const raw of md.split("\n")) {
-      const line = raw.trim();
-      if (!line) continue;
-      const heading = line.match(/^#{1,6}\s+(.*)$/);
-      const item = line.match(/^[-*•]\s+(.*)$/);
-      if (heading) blocks.push({ kind: "h", parts: inline(heading[1]) });
-      else if (item) blocks.push({ kind: "li", parts: inline(item[1]) });
-      else blocks.push({ kind: "p", parts: inline(line) });
-    }
-    return blocks;
-  }
-
-  function inline(text: string): Part[] {
-    // Links keep their text only: the notes window doesn't navigate.
-    text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-    const parts: Part[] = [];
-    for (const piece of text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*\s][^*]*\*)/)) {
-      if (!piece) continue;
-      if (piece.startsWith("`")) parts.push({ text: piece.slice(1, -1), code: true });
-      else if (piece.startsWith("**")) parts.push({ text: piece.slice(2, -2), bold: true });
-      else if (piece.startsWith("*")) parts.push({ text: piece.slice(1, -1), em: true });
-      else parts.push({ text: piece });
-    }
-    return parts;
-  }
-
-  const blocks = $derived(info ? parse(info.notes) : []);
   const percent = $derived(
     progress?.total ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : null,
   );
@@ -104,15 +73,8 @@
 
     <section class="notes-wrap" class:expanded>
       <div class="notes" bind:this={notesEl}>
-        {#if blocks.length}
-          {#each blocks as b, i (i)}
-            <svelte:element this={b.kind === "h" ? "h2" : b.kind === "li" ? "li" : "p"}>
-              {#each b.parts as part, j (j)}
-                {#if part.code}<code>{part.text}</code>{:else if part.bold}<strong>{part.text}</strong
-                  >{:else if part.em}<em>{part.text}</em>{:else}{part.text}{/if}
-              {/each}
-            </svelte:element>
-          {/each}
+        {#if info.notes.trim()}
+          <Markdown text={info.notes} />
         {:else}
           <p class="muted">{tr("No release notes.")}</p>
         {/if}
@@ -193,25 +155,14 @@
   .expanded .notes {
     overflow-y: auto;
   }
-  .notes h2 {
+  /* Release notes' "### Improved" and the like: small section labels. */
+  .notes :global(.md :is(h2, h3, h4)) {
     margin: 10px 0 4px;
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--muted);
-  }
-  .notes li {
-    margin: 4px 0 4px 16px;
-  }
-  .notes p {
-    margin: 6px 0;
-  }
-  code {
-    padding: 0 4px;
-    border-radius: 4px;
-    background: var(--hover);
-    font: 12px ui-monospace, Menlo, Consolas, monospace;
   }
   .fade {
     position: absolute;
