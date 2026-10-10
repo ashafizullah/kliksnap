@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.4
+
+### Improved
+
+- Easier install on macOS: run `curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash` in Terminal to install or reinstall KlikSnap without the Gatekeeper warning. The download instructions also now cover macOS 15, where right-click → Open no longer works (use System Settings → Privacy & Security → Open Anyway)
+
 ## 0.9.3
 
 ### Fixed

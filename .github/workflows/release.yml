@@ -60,8 +60,11 @@ jobs:
 
             ## Download
 
-            **macOS** (Apple Silicon + Intel): download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications.
-            The app is not notarized yet: the first time, right-click KlikSnap → Open, or run `xattr -cr /Applications/KlikSnap.app`.
+            **macOS** (Apple Silicon + Intel): run this in Terminal to install or reinstall:
+            ```sh
+            curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
+            ```
+            Or download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications. The app isn't notarized, so macOS blocks it the first time: go to System Settings → Privacy & Security → **Open Anyway**, or run `xattr -cr /Applications/KlikSnap.app`.
 
             **Windows**: download `KlikSnap_*_x64-setup.exe` (or the `.msi`).
           releaseDraft: true
