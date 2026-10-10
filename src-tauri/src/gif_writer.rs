@@ -2,6 +2,9 @@
 //! keeps only the rectangle that changed, quantized to 256 colors on worker
 //! threads, and shows until the next one came in, so a still screen costs
 //! nothing.
+//!
+//! Linux records GIFs with ffmpeg and only uses `fit` and `FPS` from here.
+#![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 use std::collections::BTreeMap;
 use std::fs::File;
