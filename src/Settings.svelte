@@ -3,6 +3,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { invoke, isLinux, isMac, isWindows, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
+  import { LANGUAGES } from "./lib/languages";
 
   type Settings = {
     hotkey_area: string;
@@ -36,7 +37,10 @@
     ocr_mode: "system" | "ai";
     ai_profiles: AiProfile[];
     ai_profile: number;
+    ai_language: string;
+    ai_actions: AiAction[];
   };
+  type AiAction = { name: string; prompt: string };
   type AiProfile = { name: string; base_url: string; api_key: string; model: string };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
 
@@ -120,6 +124,25 @@
     });
     s.ai_profile = s.ai_profiles.length - 1;
     selectProfile();
+  }
+
+  function addAction() {
+    if (!s) return;
+    s.ai_actions.push({ name: "", prompt: "" });
+  }
+
+  function deleteAction(i: number) {
+    if (!s || s.ai_actions.length < 2) return;
+    s.ai_actions.splice(i, 1);
+    save();
+  }
+
+  /** Back to the presets: Rust fills an empty list in. */
+  async function resetActions() {
+    if (!s) return;
+    s.ai_actions = [];
+    await save();
+    s = await invoke<Settings>("get_settings");
   }
 
   function deleteProfile() {
@@ -562,6 +585,45 @@
             <p class="hint" class:error={aiStatus.failed} role="status">{aiStatus.text}</p>
           {/if}
         </section>
+
+        <section>
+          <h2>{tr("Language")}</h2>
+          <label class="row">
+            <span>{tr("AI answers in")}</span>
+            <select bind:value={s.ai_language} onchange={save}>
+              <option value="">{tr("The app's language")}</option>
+              {#each LANGUAGES as l (l.en)}
+                <option value={l.en}>{l.native}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="hint">{tr("Also what Translate translates into, unless you pick another language in the AI window.")}</p>
+        </section>
+
+        <section>
+          <h2>{tr("Actions")}</h2>
+          <p class="hint">{tr("Buttons in the AI window. Explain runs the first one. {language} becomes the language above, or one you pick in the AI window.")}</p>
+          {#each s.ai_actions as a, i (i)}
+            <div class="action">
+              <div class="controls">
+                <input class="template name" type="text" spellcheck="false" placeholder={tr("Name")} aria-label={tr("Name")} bind:value={a.name} oninput={saveSoon} />
+                <button
+                  class="secondary icon"
+                  title={tr("Delete action")}
+                  aria-label={tr("Delete action")}
+                  disabled={s.ai_actions.length < 2}
+                  onclick={() => deleteAction(i)}>−</button
+                >
+              </div>
+              <textarea rows="2" spellcheck="false" placeholder={tr("What to ask about the screenshot")} aria-label={tr("Prompt")} bind:value={a.prompt} oninput={saveSoon}
+              ></textarea>
+            </div>
+          {/each}
+          <div class="row">
+            <button class="secondary" onclick={resetActions}>{tr("Reset to presets")}</button>
+            <button class="secondary" onclick={addAction}>{tr("Add action")}</button>
+          </div>
+        </section>
       {:else}
         <section>
           <h2>{tr("Shortcuts")}</h2>
@@ -684,6 +746,26 @@
   }
   .link:hover {
     text-decoration: underline;
+  }
+  .action {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .action .name {
+    flex: 1;
+    width: auto;
+  }
+  .action textarea {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    resize: vertical;
   }
   .controls {
     display: flex;

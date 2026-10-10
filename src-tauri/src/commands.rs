@@ -726,16 +726,20 @@ fn open_explain(app: &AppHandle, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// Asks an AI profile (the one in use when `profile` is None) to explain a
-/// shot; returns Markdown.
+/// Continues a conversation about a shot with an AI profile (the one in use
+/// when `profile` is None); returns the reply as Markdown.
 #[tauri::command]
-pub async fn explain(
+pub async fn ai_chat(
     id: u32,
     profile: Option<usize>,
+    turns: Vec<crate::ai::Turn>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let ai = state
-        .settings()
+    if turns.is_empty() {
+        return Err("nothing to ask".into());
+    }
+    let s = state.settings();
+    let ai = s
         .ai(profile)
         .filter(|p| p.is_set_up())
         .cloned()
@@ -744,23 +748,39 @@ pub async fn explain(
     let png = tauri::async_runtime::spawn_blocking(move || crate::ai::encode(&img))
         .await
         .map_err(|e| e.to_string())??;
-    ai.ask_about_image(&crate::ai::explain_prompt(crate::i18n::code()), &png)
-        .await
+    let system = crate::ai::system_prompt(&s.ai_language());
+    ai.chat(Some(&system), &png, &turns).await
 }
 
 #[derive(Serialize)]
-pub struct AiProfiles {
-    names: Vec<String>,
+pub struct AiInfo {
+    profiles: Vec<String>,
     active: usize,
+    /// `{language}` is left for the window, which lets you pick it.
+    actions: Vec<crate::ai::Action>,
+    /// The reply language from Settings, in English: the default for `{language}`.
+    language: String,
 }
 
-/// The AI profiles' names, for switching between them.
+/// The AI profiles' names and the actions, for the AI window.
 #[tauri::command]
-pub fn ai_profiles(state: State<AppState>) -> AiProfiles {
+pub fn ai_info(state: State<AppState>) -> AiInfo {
     let s = state.settings();
-    AiProfiles {
-        names: s.ai_profiles.into_iter().map(|p| p.name).collect(),
+    let language = s.ai_language();
+    // One still being written in Settings has no prompt yet.
+    let mut actions: Vec<_> = s
+        .ai_actions
+        .into_iter()
+        .filter(|a| !a.prompt.trim().is_empty())
+        .collect();
+    if actions.is_empty() {
+        actions = crate::ai::Action::defaults();
+    }
+    AiInfo {
+        profiles: s.ai_profiles.into_iter().map(|p| p.name).collect(),
         active: s.ai_profile,
+        actions,
+        language,
     }
 }
 

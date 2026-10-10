@@ -67,6 +67,11 @@ pub struct Settings {
     pub ai_profiles: Vec<crate::ai::Profile>,
     /// Index of the profile in use.
     pub ai_profile: usize,
+    /// The language the AI answers in, in English ("Japanese"); empty
+    /// follows the app's language.
+    pub ai_language: String,
+    /// Buttons in the AI window; the first runs from the Explain buttons.
+    pub ai_actions: Vec<crate::ai::Action>,
 }
 
 impl Default for Settings {
@@ -103,6 +108,8 @@ impl Default for Settings {
             ocr_mode: "system".into(),
             ai_profiles: vec![crate::ai::Profile::openai()],
             ai_profile: 0,
+            ai_language: String::new(),
+            ai_actions: crate::ai::Action::defaults(),
         }
     }
 }
@@ -125,8 +132,12 @@ impl Settings {
         output::recording_name(&self.record_template, ext)
     }
 
-    /// Keeps at least one AI profile, with a valid one in use.
+    /// Keeps at least one AI profile, with a valid one in use, and at least
+    /// one action.
     pub fn normalize(mut self) -> Self {
+        if self.ai_actions.is_empty() {
+            self.ai_actions = crate::ai::Action::defaults();
+        }
         if self.ai_profiles.is_empty() {
             self.ai_profiles.push(crate::ai::Profile::openai());
         }
@@ -137,6 +148,14 @@ impl Settings {
     /// The AI profile in use, or `index` when given.
     pub fn ai(&self, index: Option<usize>) -> Option<&crate::ai::Profile> {
         self.ai_profiles.get(index.unwrap_or(self.ai_profile))
+    }
+
+    /// The language the AI answers in.
+    pub fn ai_language(&self) -> String {
+        match self.ai_language.trim() {
+            "" => crate::ai::language(crate::i18n::code()).into(),
+            language => language.into(),
+        }
     }
 
     pub fn save_dir(&self, app: &AppHandle) -> PathBuf {
@@ -185,10 +204,13 @@ mod tests {
 
     #[test]
     fn normalize_keeps_a_valid_ai_profile() {
-        let s: Settings = serde_json::from_str(r#"{"ai_profiles": [], "ai_profile": 3}"#).unwrap();
+        let s: Settings =
+            serde_json::from_str(r#"{"ai_profiles": [], "ai_profile": 3, "ai_actions": []}"#)
+                .unwrap();
         let s = s.normalize();
         assert_eq!(s.ai_profiles.len(), 1);
         assert_eq!(s.ai_profile, 0);
         assert!(s.ai(None).is_some());
+        assert!(!s.ai_actions.is_empty());
     }
 }

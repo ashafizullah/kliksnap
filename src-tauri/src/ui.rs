@@ -495,6 +495,8 @@ pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, "history", WebviewUrl::App("history.html".into()))
         .title("KlikSnap History")
+        // Like Settings: stays beside the app you paste an old capture into.
+        .always_on_top(true)
         .inner_size(820.0, 600.0)
         .min_inner_size(480.0, 360.0)
         .center()

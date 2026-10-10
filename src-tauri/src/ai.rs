@@ -55,19 +55,49 @@ impl Profile {
 
     /// Asks `prompt` about a PNG (base64) and returns the reply's text.
     pub async fn ask_about_image(&self, prompt: &str, png_base64: &str) -> Result<String, String> {
+        let turn = Turn {
+            role: "user".into(),
+            content: prompt.into(),
+        };
+        self.chat(None, png_base64, std::slice::from_ref(&turn))
+            .await
+    }
+
+    /// Continues a conversation about a PNG (base64), which goes with the
+    /// first message; returns the reply's text.
+    pub async fn chat(
+        &self,
+        system: Option<&str>,
+        png_base64: &str,
+        turns: &[Turn],
+    ) -> Result<String, String> {
         if !self.is_set_up() {
             return Err(tr("Fill in the base URL and the model first.").into());
         }
-        let body = json!({
-            "model": self.model.trim(),
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "type": "text", "text": prompt },
-                    { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{png_base64}") } },
-                ],
-            }],
-        });
+        let mut messages = Vec::new();
+        if let Some(system) = system {
+            messages.push(json!({ "role": "system", "content": system }));
+        }
+        for (i, turn) in turns.iter().enumerate() {
+            // Only the webview's two roles: nothing can pose as the system.
+            let role = if turn.role == "assistant" {
+                "assistant"
+            } else {
+                "user"
+            };
+            messages.push(if i == 0 {
+                json!({
+                    "role": role,
+                    "content": [
+                        { "type": "text", "text": turn.content },
+                        { "type": "image_url", "image_url": { "url": format!("data:image/png;base64,{png_base64}") } },
+                    ],
+                })
+            } else {
+                json!({ "role": role, "content": turn.content })
+            });
+        }
+        let body = json!({ "model": self.model.trim(), "messages": messages });
         // reqwest is built without a TLS crypto provider, as for the updater.
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -143,18 +173,73 @@ pub fn encode(img: &RgbaImage) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(png))
 }
 
-/// What the model is asked about a screenshot, answering in `lang` ("en"/"id").
-pub fn explain_prompt(lang: &str) -> String {
-    let language = if lang == "id" {
+/// One message of a conversation about a screenshot.
+#[derive(Clone, Deserialize)]
+pub struct Turn {
+    /// "user" or "assistant".
+    pub role: String,
+    pub content: String,
+}
+
+/// Something to ask about a screenshot, from a button in the AI window.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Action {
+    pub name: String,
+    /// `{language}` becomes the app's language.
+    pub prompt: String,
+}
+
+impl Action {
+    fn new(name: &str, prompt: &str) -> Self {
+        Self {
+            name: name.into(),
+            prompt: prompt.into(),
+        }
+    }
+
+    /// The presets; the first runs from the Explain buttons.
+    pub fn defaults() -> Vec<Self> {
+        vec![
+            Self::new(
+                "Explain",
+                "Explain this screenshot to me. Say briefly what it shows, then what \
+                 matters: if it has an error, what it means and how to fix it; if it has \
+                 code, a chart, a document or an interface, what it says or does.",
+            ),
+            Self::new(
+                "Translate",
+                "Translate all the text in this screenshot into {language}, in reading \
+                 order. Output only the translation.",
+            ),
+            Self::new(
+                "Summarize",
+                "Summarize this screenshot in a few short bullet points.",
+            ),
+            Self::new(
+                "Table to CSV",
+                "Extract the table in this screenshot as CSV in one code block, with its \
+                 headers. No commentary.",
+            ),
+        ]
+    }
+}
+
+/// The app's language for prompts, from `code` ("en"/"id").
+pub fn language(code: &str) -> &'static str {
+    if code == "id" {
         "Indonesian"
     } else {
         "English"
-    };
+    }
+}
+
+/// Sets the scene for a conversation about a screenshot.
+pub fn system_prompt(language: &str) -> String {
     format!(
-        "Explain this screenshot to the person who took it. Say briefly what it shows, \
-         then what matters: if it has an error, what it means and how to fix it; if it \
-         has code, a chart, a document or an interface, what it says or does. Be concise \
-         and use short Markdown (lists, `code`). Answer in {language}."
+        "You help the user with a screenshot they just took, attached to their first \
+         message. Answer in {language} unless they ask otherwise. Be concise and use \
+         short Markdown (lists, `code`, code blocks)."
     )
 }
 
