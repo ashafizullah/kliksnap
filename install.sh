@@ -3,8 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
 #
-# KlikSnap isn't notarized, so a DMG downloaded in a browser is blocked by Gatekeeper on first
-# launch. curl doesn't quarantine what it downloads, so the app installed here opens directly.
+# Releases from 0.10.1 on are notarized; older ones (KLIKSNAP_VERSION) aren't, but curl doesn't
+# quarantine what it downloads, so the app installed here opens directly either way.
 #
 # Env: KLIKSNAP_VERSION=x.y.z installs that release instead of the latest.
 set -euo pipefail

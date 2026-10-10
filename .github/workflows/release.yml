@@ -60,6 +60,13 @@ jobs:
           # Signs the update packages; the app ships the matching public key.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Developer ID signing and notarization for macOS (the action skips them on other runners).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: KlikSnap ${{ github.ref_name }}
@@ -73,7 +80,7 @@ jobs:
             ```sh
             curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
             ```
-            Or download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications. The app isn't notarized, so macOS blocks it the first time: go to System Settings → Privacy & Security → **Open Anyway**, or run `xattr -cr /Applications/KlikSnap.app`.
+            Or download `KlikSnap_*_universal.dmg`, open it and drag KlikSnap into Applications.
 
             **Windows**: download `KlikSnap_*_x64-setup.exe` (or the `.msi`).
 

@@ -57,13 +57,11 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Windows 10/11 (x64) | `KlikSnap_x.y.z_x64-setup.exe` or `.msi` |
 | Linux x86_64 (beta) | `KlikSnap_x.y.z_amd64.deb`, `KlikSnap-x.y.z-1.x86_64.rpm` or `KlikSnap_x.y.z_amd64.AppImage` |
 
-**macOS:** the easiest way is the install script. It downloads the latest DMG, copies KlikSnap into Applications and opens it (run it again later to reinstall; updates otherwise arrive in the app):
+**macOS:** open the DMG and drag KlikSnap into Applications. KlikSnap is signed and notarized by Apple, so it opens without a Gatekeeper warning. Or use the install script, which downloads the latest DMG, copies KlikSnap into Applications and opens it (run it again later to reinstall; updates otherwise arrive in the app):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
 ```
-
-KlikSnap isn't notarized by Apple, so if you install the DMG from your browser instead, macOS blocks it on first launch. Open it once, then go to System Settings → Privacy & Security and click **Open Anyway** (on macOS 14 and earlier, right-clicking KlikSnap → **Open** also works). Or run `xattr -cr /Applications/KlikSnap.app`.
 
 Either way, allow **Screen Recording** when asked (System Settings → Privacy & Security → Screen Recording).
 
@@ -110,7 +108,7 @@ On Linux, install the [Tauri prerequisites](https://v2.tauri.app/start/prerequis
 
 CI runs type checks, `cargo fmt`, `clippy` and tests on macOS, Windows and Linux for every push and pull request. Pushing a `v*` tag builds the universal macOS DMG, the Windows installers and the Linux packages, signs the update packages and attaches everything (including `latest.json` for the in-app updater) to a draft GitHub release. Publish the draft to roll it out: installed apps only see published releases.
 
-Releases need the `TAURI_SIGNING_PRIVATE_KEY` repository secret. The matching public key is in `tauri.conf.json`. Bump `version` in `tauri.conf.json`, `Cargo.toml` and `package.json` before tagging.
+Releases need the `TAURI_SIGNING_PRIVATE_KEY` repository secret, plus `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID` to sign and notarize the macOS build. The matching public key is in `tauri.conf.json`. Bump `version` in `tauri.conf.json`, `Cargo.toml` and `package.json` before tagging.
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
