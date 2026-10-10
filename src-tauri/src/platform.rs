@@ -323,7 +323,9 @@ mod imp {
     /// Plays the system's own screenshot sound.
     pub fn play_shutter() {
         const PATH: &str = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif";
-        let Some(class) = AnyClass::get(c"NSSound") else { return };
+        let Some(class) = AnyClass::get(c"NSSound") else {
+            return;
+        };
         let path = objc2_foundation::NSString::from_str(PATH);
         unsafe {
             let sound: Allocated<AnyObject> = msg_send![class, alloc];
@@ -519,7 +521,10 @@ mod imp {
         std::thread::spawn(|| {
             let players: [(&str, &[&str]); 2] = [
                 ("canberra-gtk-play", &["-i", "camera-shutter"]),
-                ("paplay", &["/usr/share/sounds/freedesktop/stereo/camera-shutter.oga"]),
+                (
+                    "paplay",
+                    &["/usr/share/sounds/freedesktop/stereo/camera-shutter.oga"],
+                ),
             ];
             for (cmd, args) in players {
                 let played = Command::new(cmd)
