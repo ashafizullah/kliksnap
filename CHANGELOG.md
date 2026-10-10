@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.6
+
+### New
+
+- Device mockups: put a screenshot in a MacBook, desktop monitor, phone, app window or browser window, on any background. In the editor, open Background → Frame. With a Transparent background you get the mockup alone
+
 ## 0.9.5
 
 ### New

@@ -42,8 +42,8 @@ export type Shape = DragShape | PenShape | TextShape | StepShape;
 
 export type Rect = { x: number; y: number; w: number; h: number };
 
-/** Padding, corners and shadow around the exported image; sizes in logical px. */
-export type Backdrop = { fill: FillId; padding: number; radius: number; shadow: boolean };
+/** Padding, corners, shadow and a device frame around the exported image; sizes in logical px. */
+export type Backdrop = { fill: FillId; padding: number; radius: number; shadow: boolean; frame: FrameId };
 
 export type Scene = { shapes: Shape[]; crop: Rect | null; backdrop: Backdrop | null };
 
@@ -74,7 +74,19 @@ export const RADII = [
   { label: "L", value: 16 },
 ];
 
-export const DEFAULT_BACKDROP: Backdrop = { fill: "ocean", padding: 48, radius: 8, shadow: true };
+/** Frames drawn around the screenshot, inside the padding. */
+export const FRAMES = [
+  { id: "none", label: "None" },
+  { id: "macbook", label: "MacBook" },
+  { id: "desktop", label: "Desktop" },
+  { id: "phone", label: "Phone" },
+  { id: "window", label: "Window" },
+  { id: "browser", label: "Browser" },
+] as const;
+
+export type FrameId = (typeof FRAMES)[number]["id"];
+
+export const DEFAULT_BACKDROP: Backdrop = { fill: "ocean", padding: 48, radius: 8, shadow: true, frame: "none" };
 
 /** A saved backdrop if it is well formed, else null. */
 export function parseBackdrop(v: unknown): Backdrop | null {
@@ -83,7 +95,8 @@ export function parseBackdrop(v: unknown): Backdrop | null {
   if (typeof b.fill !== "string" || !(b.fill in FILLS)) return null;
   const padding = PADDINGS.find((p) => p.value === b.padding)?.value ?? DEFAULT_BACKDROP.padding;
   const radius = RADII.find((r) => r.value === b.radius)?.value ?? DEFAULT_BACKDROP.radius;
-  return { fill: b.fill as FillId, padding, radius, shadow: b.shadow !== false };
+  const frame = FRAMES.find((f) => f.id === b.frame)?.id ?? "none";
+  return { fill: b.fill as FillId, padding, radius, shadow: b.shadow !== false, frame };
 }
 
 export function fillCss(fill: FillId) {

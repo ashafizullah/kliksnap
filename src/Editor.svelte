@@ -7,6 +7,7 @@
     DEFAULT_BACKDROP,
     FILLS,
     FONTS,
+    FRAMES,
     PADDINGS,
     RADII,
     SIZES,
@@ -20,12 +21,13 @@
     type DragShape,
     type FillId,
     type FontId,
+    type FrameId,
     type Rect,
     type Scene,
     type Shape,
     type Tool,
   } from "./lib/editor/shapes";
-  import { drawCropMask, drawScene, exportPixels } from "./lib/editor/render";
+  import { drawCropMask, drawFrame, drawScene, exportPixels, frameInsets, frameScreenRadii } from "./lib/editor/render";
 
   const id = Number(param("id"));
 
@@ -48,6 +50,7 @@
   let base = $state.raw<HTMLImageElement | null>(null);
   let scale = $state(1);
   let canvas: HTMLCanvasElement;
+  let frameCanvas = $state<HTMLCanvasElement>();
   let stage: HTMLElement;
   let view = $state({ w: 0, h: 0 });
 
@@ -189,7 +192,7 @@
   });
 
   $effect(() => {
-    void scene.backdrop?.padding;
+    void [scene.backdrop?.padding, scene.backdrop?.frame];
     fit();
   });
 
@@ -199,19 +202,52 @@
     if (!b || !base) return null;
     const k = (view.w / base.naturalWidth) * scale;
     const pad = b.padding * k;
+    const radius = b.radius * k;
+    const framed = b.frame !== "none";
     return {
       pad,
+      k,
       fill: fillCss(b.fill),
-      radius: b.radius * k,
-      shadow: b.shadow ? `0 ${Math.max(2, pad * 0.12)}px ${Math.max(8, pad * 0.5)}px rgba(0, 0, 0, 0.35)` : "none",
+      frame: b.frame,
+      inset: frameInsets(b.frame, view.w, k),
+      radius,
+      screenRadius: frameScreenRadii(b.frame, radius, view.w)
+        .map((r) => `${r}px`)
+        .join(" "),
+      shadow: b.shadow && !framed ? `0 ${Math.max(2, pad * 0.12)}px ${Math.max(8, pad * 0.5)}px rgba(0, 0, 0, 0.35)` : "none",
+      frameShadow: b.shadow ? { blur: Math.max(8, pad * 0.5), offsetY: Math.max(2, pad * 0.12) } : null,
     };
+  });
+
+  // The frame preview, drawn by the export's own code. It spills into the
+  // padding so its shadow shows.
+  $effect(() => {
+    const p = preview;
+    if (!p || p.frame === "none" || !frameCanvas) return;
+    const dpr = devicePixelRatio;
+    const { top, right, bottom, left } = p.inset;
+    const cssW = view.w + left + right + 2 * p.pad;
+    const cssH = view.h + top + bottom + 2 * p.pad;
+    frameCanvas.width = Math.round(cssW * dpr);
+    frameCanvas.height = Math.round(cssH * dpr);
+    frameCanvas.style.width = `${cssW}px`;
+    frameCanvas.style.height = `${cssH}px`;
+    const ctx = frameCanvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    drawFrame(ctx, p.frame, p.pad + left, p.pad + top, view.w, view.h, p.k, p.radius, p.frameShadow);
   });
 
   function fit() {
     if (!base) return;
     const natural = { w: base.naturalWidth / scale, h: base.naturalHeight / scale };
     const pad = 2 * (scene.backdrop?.padding ?? 0);
-    const k = Math.min(1, (stage.clientWidth - 32) / (natural.w + pad), (stage.clientHeight - 32) / (natural.h + pad));
+    const inset = frameInsets(scene.backdrop?.frame ?? "none", natural.w, 1);
+    const k = Math.min(
+      1,
+      (stage.clientWidth - 32) / (natural.w + pad + inset.left + inset.right),
+      (stage.clientHeight - 32) / (natural.h + pad + inset.top + inset.bottom),
+    );
     view = { w: Math.round(natural.w * k), h: Math.round(natural.h * k) };
   }
 
@@ -527,6 +563,16 @@
               >
             {/each}
           </div>
+          <div class="row">
+            <span class="muted">{tr("Frame")}</span>
+            {#each FRAMES as f (f.id)}
+              <button
+                class="chip"
+                class:active={(scene.backdrop ?? lastBackdrop).frame === f.id}
+                onclick={() => setBackdrop({ frame: f.id as FrameId })}>{tr(f.label)}</button
+              >
+            {/each}
+          </div>
           <label class="row">
             <input
               type="checkbox"
@@ -578,16 +624,23 @@
       style:background={scene.backdrop?.fill === "clear" ? undefined : preview?.fill}
     >
       <div
+        class="device"
+        style:padding={preview ? `${preview.inset.top}px ${preview.inset.right}px ${preview.inset.bottom}px ${preview.inset.left}px` : "0"}
+      >
+      {#if preview && preview.frame !== "none"}
+        <canvas bind:this={frameCanvas} class="frame" style:left="{-preview.pad}px" style:top="{-preview.pad}px"></canvas>
+      {/if}
+      <div
         class="canvas-wrap"
         style="width:{view.w}px; height:{view.h}px"
-        style:border-radius="{preview?.radius ?? 0}px"
+        style:border-radius={preview?.screenRadius ?? "0"}
         style:box-shadow={preview?.shadow}
       >
         <canvas
           bind:this={canvas}
           class:text-tool={tool === "text"}
           style="width:{view.w}px; height:{view.h}px"
-          style:border-radius="{preview?.radius ?? 0}px"
+          style:border-radius={preview?.screenRadius ?? "0"}
           onpointerdown={onPointerDown}
           onpointermove={onPointerMove}
           onpointerup={onPointerUp}
@@ -605,6 +658,7 @@
             onblur={commitText}
           ></textarea>
         {/if}
+      </div>
       </div>
     </div>
     {#if status}
@@ -810,6 +864,13 @@
   }
   .chip.active:hover {
     background: var(--accent);
+  }
+  .device {
+    position: relative;
+  }
+  canvas.frame {
+    position: absolute;
+    pointer-events: none;
   }
   .canvas-wrap {
     position: relative;
