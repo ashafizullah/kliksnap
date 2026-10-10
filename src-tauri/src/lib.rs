@@ -405,7 +405,7 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let settings = state.settings();
     let dir = settings.save_dir(app);
     let ext = if gif { "gif" } else { "mp4" };
-    let path = output::unique_path(&dir, &output::recording_name(ext));
+    let path = output::unique_path(&dir, &settings.recording_name(ext));
     let started = std::fs::create_dir_all(&dir)
         .map_err(|e| e.to_string())
         .and_then(|_| {

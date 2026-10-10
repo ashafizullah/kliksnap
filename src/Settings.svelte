@@ -19,6 +19,7 @@
     image_format: "png" | "jpg";
     jpg_quality: number;
     file_template: string;
+    record_template: string;
     record_countdown: number;
     record_scale: number;
     record_system_audio: boolean;
@@ -94,6 +95,11 @@
   $effect(() => {
     if (!s) return;
     invoke<string>("file_name_example", { template: s.file_template, format: s.image_format }).then((name) => (example = name));
+  });
+  let recordExample = $state("");
+  $effect(() => {
+    if (!s) return;
+    invoke<string>("file_name_example", { template: s.record_template, format: "mp4" }).then((name) => (recordExample = name));
   });
 
   // Every window shows its language from when it opened: reload this one.
@@ -378,6 +384,14 @@
             {s.record_scale < 100
               ? `${tr("Smaller videos, less detail.")}${isMac ? " " + tr("On a Retina display, Low records at the size things appear on screen.") : ""}`
               : tr("Full detail; the largest files.")}
+          </p>
+          <label class="row">
+            <span>{tr("File name")}</span>
+            <input class="template" type="text" spellcheck="false" bind:value={s.record_template} onchange={save} />
+          </label>
+          <p class="hint">
+            {recordExample}<br />
+            {tr("Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.")}
           </p>
         </section>
 

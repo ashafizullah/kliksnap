@@ -78,15 +78,22 @@ fn flatten(img: &RgbaImage) -> RgbImage {
 }
 
 pub const DEFAULT_TEMPLATE: &str = "KlikSnap %Y-%m-%d at %H.%M.%S";
+pub const DEFAULT_RECORDING_TEMPLATE: &str = "KlikSnap Recording %Y-%m-%d at %H.%M.%S";
 
 /// The template's date fields filled in, with characters no file system
 /// allows replaced. A broken or empty template falls back to the default.
 pub fn file_name(template: &str, ext: &str) -> String {
-    file_name_at(template, ext, chrono::Local::now())
+    file_name_at(template, DEFAULT_TEMPLATE, ext, chrono::Local::now())
+}
+
+/// Like `file_name`, for a recording: `ext` is "mp4" or "gif".
+pub fn recording_name(template: &str, ext: &str) -> String {
+    file_name_at(template, DEFAULT_RECORDING_TEMPLATE, ext, chrono::Local::now())
 }
 
 fn file_name_at<Tz: chrono::TimeZone>(
     template: &str,
+    fallback: &str,
     ext: &str,
     now: chrono::DateTime<Tz>,
 ) -> String
@@ -109,16 +116,9 @@ where
         (!clean.is_empty()).then(|| clean.to_string())
     };
     let stem = fill(template)
-        .or_else(|| fill(DEFAULT_TEMPLATE))
+        .or_else(|| fill(fallback))
         .unwrap_or_default();
     format!("{stem}.{ext}")
-}
-
-/// `ext` is "mp4" or "gif".
-pub fn recording_name(ext: &str) -> String {
-    chrono::Local::now()
-        .format(&format!("KlikSnap Recording %Y-%m-%d at %H.%M.%S.{ext}"))
-        .to_string()
 }
 
 /// `dir/name`, with " (2)", " (3)"… appended when the file already exists.
@@ -186,24 +186,28 @@ mod tests {
     #[test]
     fn file_name_fills_the_template() {
         assert_eq!(
-            file_name_at(DEFAULT_TEMPLATE, "png", at()),
+            file_name_at(DEFAULT_TEMPLATE, DEFAULT_TEMPLATE, "png", at()),
             "KlikSnap 2026-10-09 at 07.05.03.png"
         );
-        assert_eq!(file_name_at("shot-%H%M%S", "jpg", at()), "shot-070503.jpg");
+        assert_eq!(file_name_at("shot-%H%M%S", DEFAULT_TEMPLATE, "jpg", at()), "shot-070503.jpg");
     }
 
     #[test]
     fn file_name_replaces_bad_characters() {
-        assert_eq!(file_name_at("a/b:%H:%M", "png", at()), "a-b-07-05.png");
-        assert_eq!(file_name_at("  ..x.. ", "png", at()), "x.png");
+        assert_eq!(file_name_at("a/b:%H:%M", DEFAULT_TEMPLATE, "png", at()), "a-b-07-05.png");
+        assert_eq!(file_name_at("  ..x.. ", DEFAULT_TEMPLATE, "png", at()), "x.png");
     }
 
     #[test]
     fn file_name_falls_back_on_a_broken_template() {
         let fallback = "KlikSnap 2026-10-09 at 07.05.03.png";
-        assert_eq!(file_name_at("", "png", at()), fallback);
-        assert_eq!(file_name_at("%Q bad", "png", at()), fallback);
-        assert_eq!(file_name_at("/:..", "png", at()), "--.png");
+        assert_eq!(file_name_at("", DEFAULT_TEMPLATE, "png", at()), fallback);
+        assert_eq!(file_name_at("%Q bad", DEFAULT_TEMPLATE, "png", at()), fallback);
+        assert_eq!(file_name_at("/:..", DEFAULT_TEMPLATE, "png", at()), "--.png");
+        assert_eq!(
+            file_name_at("", DEFAULT_RECORDING_TEMPLATE, "mp4", at()),
+            "KlikSnap Recording 2026-10-09 at 07.05.03.mp4"
+        );
     }
 
     #[test]

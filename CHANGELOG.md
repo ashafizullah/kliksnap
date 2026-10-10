@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.9.5
+
+### New
+
+- Name recordings from a template, like screenshots: Settings → Recording → File name, for example `rec-%Y%m%d-%H%M%S`
+
 ## 0.9.4
 
 ### Improved

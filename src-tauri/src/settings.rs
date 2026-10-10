@@ -35,6 +35,8 @@ pub struct Settings {
     pub jpg_quality: u8,
     /// File names for screenshots: strftime fields such as %Y-%m-%d.
     pub file_template: String,
+    /// File names for recordings, like `file_template`.
+    pub record_template: String,
     /// Seconds counted down before a recording starts; 0 starts at once.
     pub record_countdown: u32,
     /// Recordings are scaled to this percentage of the screen's pixels.
@@ -77,6 +79,7 @@ impl Default for Settings {
             image_format: "png".into(),
             jpg_quality: 90,
             file_template: crate::output::DEFAULT_TEMPLATE.into(),
+            record_template: crate::output::DEFAULT_RECORDING_TEMPLATE.into(),
             record_countdown: 3,
             record_scale: 100,
             record_system_audio: false,
@@ -103,6 +106,11 @@ impl Settings {
     /// A screenshot's file name, from the template and the chosen format.
     pub fn file_name(&self) -> String {
         output::file_name(&self.file_template, self.format().ext())
+    }
+
+    /// A recording's file name; `ext` is "mp4" or "gif".
+    pub fn recording_name(&self, ext: &str) -> String {
+        output::recording_name(&self.record_template, ext)
     }
 
     pub fn save_dir(&self, app: &AppHandle) -> PathBuf {

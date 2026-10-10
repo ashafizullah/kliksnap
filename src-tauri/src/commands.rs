@@ -635,8 +635,11 @@ pub async fn find_sensitive(id: u32, state: State<'_, AppState>) -> Result<Vec<[
 
 #[tauri::command]
 pub fn file_name_example(template: String, format: String) -> String {
-    let ext = if format == "jpg" { "jpg" } else { "png" };
-    output::file_name(&template, ext)
+    match format.as_str() {
+        "mp4" => output::recording_name(&template, "mp4"),
+        "jpg" => output::file_name(&template, "jpg"),
+        _ => output::file_name(&template, "png"),
+    }
 }
 
 #[tauri::command]
