@@ -41,6 +41,7 @@ const ID: Record<string, string> = {
 
   // Overlay
   "Drag over text to copy it": "Seret di atas teks untuk menyalinnya",
+  "text only, skip QR codes": "teks saja, abaikan kode QR",
   Record: "Rekam",
   "Scrolling capture": "Tangkapan gulir",
   "Select the part that scrolls": "Pilih bagian yang bergulir",

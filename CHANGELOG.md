@@ -8,6 +8,7 @@ the in-app "Update available" dialog. Keep entries short and user-facing.
 ### New
 
 - Name recordings from a template, like screenshots: Settings → Recording → File name, for example `rec-%Y%m%d-%H%M%S`
+- Copy Text (OCR): hold `Shift` as you let go of the selection to copy only the text, skipping any QR code beside it
 
 ## 0.9.4
 

@@ -62,11 +62,11 @@
   const box = $derived(selecting ? selection : hovered);
   const pxRatio = $derived(imageWidth ? imageWidth / viewport.w : devicePixelRatio);
 
-  function finish(rect: Rect | null) {
+  function finish(rect: Rect | null, textOnly = false) {
     if (done) return;
     done = true;
     const fraction = rect && [rect.x / viewport.w, rect.y / viewport.h, rect.w / viewport.w, rect.h / viewport.h];
-    invoke("overlay_finish", { index, rect: fraction });
+    invoke("overlay_finish", { index, rect: fraction, textOnly });
   }
 
   async function setMode(next: Mode) {
@@ -104,9 +104,10 @@
     mouse = p ? { x: p[0] * viewport.w, y: p[1] * viewport.h } : { x: -1, y: -1 };
   }
 
-  function onPointerUp() {
+  function onPointerUp(e: PointerEvent) {
     if (!selecting || !selection) return;
-    if (selection.w >= 3 && selection.h >= 3) finish(selection);
+    // Copy Text: Shift skips QR codes, for text that sits beside one.
+    if (selection.w >= 3 && selection.h >= 3) finish(selection, mode === "text" && e.shiftKey);
     else dragStart = null;
   }
 
@@ -265,7 +266,7 @@
 
   <div class="hint">
     {#if mode === "text"}
-      {tr("Drag over text to copy it")}
+      {tr("Drag over text to copy it")} · <kbd>Shift</kbd> {tr("text only, skip QR codes")}
     {:else}
       {#if recording}<strong>{tr("Record")}</strong> ·{/if}
       {#if scrolling}<strong>{tr("Scrolling capture")}</strong> · {tr("Select the part that scrolls")} ·{/if}
