@@ -88,7 +88,12 @@ pub fn file_name(template: &str, ext: &str) -> String {
 
 /// Like `file_name`, for a recording: `ext` is "mp4" or "gif".
 pub fn recording_name(template: &str, ext: &str) -> String {
-    file_name_at(template, DEFAULT_RECORDING_TEMPLATE, ext, chrono::Local::now())
+    file_name_at(
+        template,
+        DEFAULT_RECORDING_TEMPLATE,
+        ext,
+        chrono::Local::now(),
+    )
 }
 
 fn file_name_at<Tz: chrono::TimeZone>(
@@ -189,21 +194,36 @@ mod tests {
             file_name_at(DEFAULT_TEMPLATE, DEFAULT_TEMPLATE, "png", at()),
             "KlikSnap 2026-10-09 at 07.05.03.png"
         );
-        assert_eq!(file_name_at("shot-%H%M%S", DEFAULT_TEMPLATE, "jpg", at()), "shot-070503.jpg");
+        assert_eq!(
+            file_name_at("shot-%H%M%S", DEFAULT_TEMPLATE, "jpg", at()),
+            "shot-070503.jpg"
+        );
     }
 
     #[test]
     fn file_name_replaces_bad_characters() {
-        assert_eq!(file_name_at("a/b:%H:%M", DEFAULT_TEMPLATE, "png", at()), "a-b-07-05.png");
-        assert_eq!(file_name_at("  ..x.. ", DEFAULT_TEMPLATE, "png", at()), "x.png");
+        assert_eq!(
+            file_name_at("a/b:%H:%M", DEFAULT_TEMPLATE, "png", at()),
+            "a-b-07-05.png"
+        );
+        assert_eq!(
+            file_name_at("  ..x.. ", DEFAULT_TEMPLATE, "png", at()),
+            "x.png"
+        );
     }
 
     #[test]
     fn file_name_falls_back_on_a_broken_template() {
         let fallback = "KlikSnap 2026-10-09 at 07.05.03.png";
         assert_eq!(file_name_at("", DEFAULT_TEMPLATE, "png", at()), fallback);
-        assert_eq!(file_name_at("%Q bad", DEFAULT_TEMPLATE, "png", at()), fallback);
-        assert_eq!(file_name_at("/:..", DEFAULT_TEMPLATE, "png", at()), "--.png");
+        assert_eq!(
+            file_name_at("%Q bad", DEFAULT_TEMPLATE, "png", at()),
+            fallback
+        );
+        assert_eq!(
+            file_name_at("/:..", DEFAULT_TEMPLATE, "png", at()),
+            "--.png"
+        );
         assert_eq!(
             file_name_at("", DEFAULT_RECORDING_TEMPLATE, "mp4", at()),
             "KlikSnap Recording 2026-10-09 at 07.05.03.mp4"
