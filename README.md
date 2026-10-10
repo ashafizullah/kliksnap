@@ -56,7 +56,15 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | macOS 12.3+ (Apple Silicon & Intel) | `KlikSnap_x.y.z_universal.dmg` |
 | Windows 10/11 (x64) | `KlikSnap_x.y.z_x64-setup.exe` or `.msi` |
 
-**macOS:** the app isn't notarized yet. On first launch, right-click KlikSnap → **Open**, or run `xattr -cr /Applications/KlikSnap.app`. Then allow **Screen Recording** when asked (System Settings → Privacy & Security → Screen Recording).
+**macOS:** the easiest way is the install script. It downloads the latest DMG, copies KlikSnap into Applications and opens it (run it again later to reinstall; updates otherwise arrive in the app):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
+```
+
+KlikSnap isn't notarized by Apple, so if you install the DMG from your browser instead, macOS blocks it on first launch. Open it once, then go to System Settings → Privacy & Security and click **Open Anyway** (on macOS 14 and earlier, right-clicking KlikSnap → **Open** also works). Or run `xattr -cr /Applications/KlikSnap.app`.
+
+Either way, allow **Screen Recording** when asked (System Settings → Privacy & Security → Screen Recording).
 
 **Windows:** SmartScreen may warn about an unsigned app. Click **More info → Run anyway**.
 
