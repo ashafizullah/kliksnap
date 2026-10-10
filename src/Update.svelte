@@ -76,7 +76,7 @@
       <div class="notes" bind:this={notesEl}>
         {#if blocks.length}
           {#each blocks as b, i (i)}
-            <svelte:element this={b.kind === "h" ? "h2" : b.kind === "li" ? "li" : "p"}>
+            <svelte:element this={b.kind === "h" ? "h2" : b.kind}>
               {#each b.parts as part, j (j)}
                 {#if part.code}<code>{part.text}</code>{:else if part.bold}<strong>{part.text}</strong
                   >{:else if part.em}<em>{part.text}</em>{:else}{part.text}{/if}
@@ -173,6 +173,10 @@
   }
   .notes li {
     margin: 4px 0 4px 16px;
+  }
+  .notes pre {
+    margin: 6px 0;
+    white-space: pre-wrap;
   }
   .notes p {
     margin: 6px 0;

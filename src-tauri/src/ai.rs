@@ -10,14 +10,15 @@ use serde_json::{json, Value};
 
 use crate::i18n::tr;
 
-const TIMEOUT: Duration = Duration::from_secs(60);
+/// Reasoning models can take a while over a large screenshot.
+const TIMEOUT: Duration = Duration::from_secs(120);
 
-/// A 16×16 red PNG: the test asks for its color, so a model that can't see
-/// images fails it.
 /// Longer sides are scaled down to this: models see no more detail than
 /// about this anyway, and it keeps uploads small.
 const MAX_SIDE: u32 = 2048;
 
+/// A 16×16 red PNG: the test asks for its color, so a model that can't see
+/// images fails it.
 const TEST_IMAGE: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR42mN4oKBAEmIY1TCqYfhqAADc5yAQocSb7AAAAABJRU5ErkJggg==";
 
 /// One model the user set up; Settings keeps several and uses one at a time.

@@ -159,6 +159,14 @@
     location.reload();
   }
 
+  // Text that may be pasted and the window closed at once, before a change
+  // event: an API key, say. Saved shortly after typing stops instead.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  function saveSoon() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(save, 400);
+  }
+
   async function save() {
     if (!s) return;
     try {
@@ -499,19 +507,19 @@
           {#if ai}
             <label class="row">
               <span>{tr("Name")}</span>
-              <input class="template" type="text" spellcheck="false" bind:value={ai.name} onchange={save} />
+              <input class="template" type="text" spellcheck="false" bind:value={ai.name} oninput={saveSoon} />
             </label>
             <label class="row">
               <span>{tr("Base URL")}</span>
-              <input class="template" type="url" spellcheck="false" placeholder="https://api.openai.com/v1" bind:value={ai.base_url} onchange={save} />
+              <input class="template" type="url" spellcheck="false" placeholder="https://api.openai.com/v1" bind:value={ai.base_url} oninput={saveSoon} />
             </label>
             <label class="row">
               <span>{tr("API key")}</span>
-              <input class="template" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" bind:value={ai.api_key} onchange={save} />
+              <input class="template" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" bind:value={ai.api_key} oninput={saveSoon} />
             </label>
             <label class="row">
               <span>{tr("Model")}</span>
-              <input class="template" type="text" spellcheck="false" placeholder="gpt-4o-mini" bind:value={ai.model} onchange={save} />
+              <input class="template" type="text" spellcheck="false" placeholder="gpt-4o-mini" bind:value={ai.model} oninput={saveSoon} />
             </label>
           {/if}
           <p class="hint">{tr("Make sure the model can read images (vision); KlikSnap sends it your screenshots.")}</p>
