@@ -26,6 +26,8 @@ pub struct Settings {
     pub save_dir: String,
     pub auto_copy: bool,
     pub auto_save: bool,
+    /// A camera shutter sounds when a screenshot is taken.
+    pub capture_sound: bool,
     /// Captures are scaled to this percentage of the screen's pixels (100 =
     /// full resolution; 50 on a Retina display gives its point size).
     pub capture_scale: u32,
@@ -75,6 +77,7 @@ impl Default for Settings {
             save_dir: String::new(),
             auto_copy: true,
             auto_save: false,
+            capture_sound: true,
             capture_scale: 100,
             image_format: "png".into(),
             jpg_quality: 90,

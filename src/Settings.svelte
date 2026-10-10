@@ -15,6 +15,7 @@
     save_dir: string;
     auto_copy: boolean;
     auto_save: boolean;
+    capture_sound: boolean;
     capture_scale: number;
     image_format: "png" | "jpg";
     jpg_quality: number;
@@ -285,6 +286,10 @@
           <label class="row">
             <span>{tr("Save to folder")}</span>
             <input type="checkbox" bind:checked={s.auto_save} onchange={save} />
+          </label>
+          <label class="row">
+            <span>{tr("Play shutter sound")}</span>
+            <input type="checkbox" bind:checked={s.capture_sound} onchange={save} />
           </label>
           <label class="row">
             <span>{tr("Resolution")}</span>

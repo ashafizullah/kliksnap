@@ -197,6 +197,7 @@ const ID: Record<string, string> = {
     "Layar membeku saat pintasan ditekan, jadi menu dan tooltip yang terbuka ikut tertangkap.",
   "After capture": "Setelah menangkap",
   "Copy to clipboard": "Salin ke clipboard",
+  "Play shutter sound": "Bunyikan suara kamera",
   "Save to folder": "Simpan ke folder",
   Resolution: "Resolusi",
   "Max (100%)": "Maks (100%)",
