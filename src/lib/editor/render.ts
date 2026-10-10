@@ -1,4 +1,4 @@
-import { FILLS, badgeText, fontCss, normalize, type Backdrop, type Rect, type Scene, type Shape } from "./shapes";
+import { FILLS, badgeText, fontCss, normalize, type Backdrop, type FrameId, type Rect, type Scene, type Shape } from "./shapes";
 
 let scratch: HTMLCanvasElement | null = null;
 
@@ -151,6 +151,188 @@ export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: n
   ctx.restore();
 }
 
+export type Insets = { top: number; right: number; bottom: number; left: number };
+
+/**
+ * Room a frame takes around a `w`-wide screenshot, in the same pixels as `w`.
+ * `unit` is pixels per logical px: the MacBook scales with the screenshot,
+ * the window's title bar with the display.
+ */
+export function frameInsets(frame: FrameId, w: number, unit: number): Insets {
+  if (frame === "macbook") {
+    const side = Math.round(w * 0.028 + w * 0.08);
+    return { top: Math.round(w * 0.04), right: side, bottom: Math.round(w * 0.045 + w * 0.028), left: side };
+  }
+  if (frame === "desktop") {
+    const side = Math.round(w * 0.025);
+    return { top: side, right: side, bottom: Math.round(w * (0.09 + 0.12 + 0.015)), left: side };
+  }
+  if (frame === "phone") {
+    const bezel = Math.round(w * 0.05);
+    return { top: bezel, right: bezel, bottom: bezel, left: bezel };
+  }
+  if (frame === "window") return { top: Math.round(28 * unit), right: 0, bottom: 0, left: 0 };
+  if (frame === "browser") return { top: Math.round(40 * unit), right: 0, bottom: 0, left: 0 };
+  return { top: 0, right: 0, bottom: 0, left: 0 };
+}
+
+export type FrameShadow = { blur: number; offsetY: number } | null;
+
+/**
+ * Draws `frame` around a screenshot that will sit at `x, y, w, h`; the
+ * screenshot itself goes on top, clipped by `frameScreenRadii`.
+ */
+export function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  frame: FrameId,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  unit: number,
+  radius: number,
+  shadow: FrameShadow,
+) {
+  const silhouette = (paths: Path2D) => {
+    if (!shadow) return;
+    ctx.save();
+    ctx.shadowColor = "rgba(0, 0, 0, 0.35)";
+    ctx.shadowBlur = shadow.blur;
+    ctx.shadowOffsetY = shadow.offsetY;
+    ctx.fillStyle = "#000";
+    ctx.fill(paths);
+    ctx.restore();
+  };
+  if (frame === "macbook") {
+    const side = w * 0.028;
+    const top = w * 0.04;
+    const chin = w * 0.045;
+    const over = w * 0.08;
+    const baseH = w * 0.028;
+    const lid = new Path2D();
+    lid.roundRect(x - side, y - top, w + 2 * side, h + top + chin, w * 0.03);
+    const baseY = y + h + chin;
+    const base = new Path2D();
+    base.roundRect(x - side - over, baseY, w + 2 * (side + over), baseH, [baseH * 0.15, baseH * 0.15, baseH * 0.5, baseH * 0.5]);
+    const all = new Path2D(lid);
+    all.addPath(base);
+    silhouette(all);
+    ctx.save();
+    ctx.fillStyle = "#0d0d0f";
+    ctx.fill(lid);
+    ctx.strokeStyle = "#4a4a4e";
+    ctx.lineWidth = Math.max(1, w * 0.002);
+    ctx.stroke(lid);
+    ctx.beginPath();
+    ctx.arc(x + w / 2, y - top / 2, w * 0.0035, 0, Math.PI * 2);
+    ctx.fillStyle = "#2a2a30";
+    ctx.fill();
+    const metal = ctx.createLinearGradient(0, baseY, 0, baseY + baseH);
+    metal.addColorStop(0, "#e3e5e8");
+    metal.addColorStop(1, "#9fa3a8");
+    ctx.fillStyle = metal;
+    ctx.fill(base);
+    // The thumb notch for opening the lid.
+    const nw = w * 0.14;
+    const nh = baseH * 0.35;
+    ctx.beginPath();
+    ctx.roundRect(x + (w - nw) / 2, baseY, nw, nh, [0, 0, nh, nh]);
+    ctx.fillStyle = "#a4a7ac";
+    ctx.fill();
+    ctx.restore();
+  } else if (frame === "desktop") {
+    const side = w * 0.025;
+    const chin = w * 0.09;
+    const neckH = w * 0.12;
+    const footH = w * 0.015;
+    const body = new Path2D();
+    body.roundRect(x - side, y - side, w + 2 * side, h + side + chin, w * 0.012);
+    const neckTop = y + h + chin;
+    const neck = new Path2D();
+    neck.moveTo(x + w * 0.43, neckTop);
+    neck.lineTo(x + w * 0.57, neckTop);
+    neck.lineTo(x + w * 0.59, neckTop + neckH);
+    neck.lineTo(x + w * 0.41, neckTop + neckH);
+    neck.closePath();
+    const foot = new Path2D();
+    foot.roundRect(x + w * 0.35, neckTop + neckH, w * 0.3, footH, [footH * 0.3, footH * 0.3, footH * 0.5, footH * 0.5]);
+    const all = new Path2D(body);
+    all.addPath(neck);
+    all.addPath(foot);
+    silhouette(all);
+    ctx.save();
+    const metal = ctx.createLinearGradient(0, neckTop, 0, neckTop + neckH + footH);
+    metal.addColorStop(0, "#c9ccd1");
+    metal.addColorStop(1, "#9fa3a8");
+    ctx.fillStyle = metal;
+    ctx.fill(neck);
+    ctx.fill(foot);
+    ctx.fillStyle = "#e3e5e8";
+    ctx.fill(body);
+    // The black glass around the screen, above the aluminum chin.
+    ctx.beginPath();
+    ctx.roundRect(x - side, y - side, w + 2 * side, h + 2 * side, [w * 0.012, w * 0.012, 0, 0]);
+    ctx.fillStyle = "#0d0d0f";
+    ctx.fill();
+    ctx.restore();
+  } else if (frame === "phone") {
+    const bezel = w * 0.05;
+    const body = new Path2D();
+    body.roundRect(x - bezel, y - bezel, w + 2 * bezel, h + 2 * bezel, w * 0.16);
+    silhouette(body);
+    ctx.save();
+    ctx.fillStyle = "#0d0d0f";
+    ctx.fill(body);
+    ctx.strokeStyle = "#5a5a60";
+    ctx.lineWidth = Math.max(1, w * 0.008);
+    ctx.stroke(body);
+    ctx.restore();
+  } else if (frame === "window" || frame === "browser") {
+    const bar = (frame === "browser" ? 40 : 28) * unit;
+    const win = new Path2D();
+    win.roundRect(x, y - bar, w, h + bar, radius);
+    silhouette(win);
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(x, y - bar, w, bar, [radius, radius, 0, 0]);
+    ctx.fillStyle = "#ebebed";
+    ctx.fill();
+    ctx.fillStyle = "#d0d0d3";
+    ctx.fillRect(x, y - Math.max(1, unit * 0.5), w, Math.max(1, unit * 0.5));
+    ["#ff5f57", "#febc2e", "#28c840"].forEach((c, i) => {
+      ctx.beginPath();
+      ctx.arc(x + (14 + i * 20) * unit, y - bar / 2, 6 * unit, 0, Math.PI * 2);
+      ctx.fillStyle = c;
+      ctx.fill();
+    });
+    if (frame === "browser") {
+      const left = x + 80 * unit;
+      const right = x + w - 16 * unit;
+      const fieldH = 24 * unit;
+      if (right - left > 40 * unit) {
+        ctx.beginPath();
+        ctx.roundRect(left, y - (bar + fieldH) / 2, right - left, fieldH, fieldH / 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+/** Corner radii of the screenshot inside a frame (top left, top right, bottom right, bottom left). */
+export function frameScreenRadii(frame: FrameId, radius: number, w: number): number[] {
+  if (frame === "macbook" || frame === "desktop") return [0, 0, 0, 0];
+  if (frame === "phone") return [w * 0.11, w * 0.11, w * 0.11, w * 0.11];
+  if (frame === "window" || frame === "browser") return [0, 0, radius, radius];
+  return [radius, radius, radius, radius];
+}
+
+/** The backdrop's shadow, sized from its padding in pixels. */
+function shadowFor(b: Backdrop, pad: number): FrameShadow {
+  return b.shadow ? { blur: Math.max(8, pad * 0.5), offsetY: Math.max(2, pad * 0.12) } : null;
+}
+
 /** Draws `image` centered on the backdrop, which fills the whole canvas. */
 function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w: number, h: number, b: Backdrop, scale: number) {
   const pad = Math.round(b.padding * scale);
@@ -166,6 +348,19 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w
     stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, width, height);
+  }
+  if (b.frame !== "none") {
+    const inset = frameInsets(b.frame, w, scale);
+    const x = pad + inset.left;
+    const y = pad + inset.top;
+    drawFrame(ctx, b.frame, x, y, w, h, scale, radius, shadowFor(b, pad));
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, frameScreenRadii(b.frame, radius, w));
+    ctx.clip();
+    ctx.drawImage(image, x, y);
+    ctx.restore();
+    return;
   }
   ctx.save();
   ctx.beginPath();
@@ -205,9 +400,10 @@ export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number
     return { bytes: new Uint8Array(data.buffer), width: r.w, height: r.h };
   }
   const pad = Math.round(scene.backdrop.padding * scale);
+  const inset = frameInsets(scene.backdrop.frame, r.w, scale);
   const out = document.createElement("canvas");
-  out.width = r.w + 2 * pad;
-  out.height = r.h + 2 * pad;
+  out.width = r.w + 2 * pad + inset.left + inset.right;
+  out.height = r.h + 2 * pad + inset.top + inset.bottom;
   const octx = out.getContext("2d", { willReadFrequently: true })!;
   drawBackdrop(octx, canvas, r.w, r.h, scene.backdrop, scale);
   const data = octx.getImageData(0, 0, out.width, out.height).data;
