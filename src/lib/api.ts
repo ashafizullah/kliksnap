@@ -13,6 +13,8 @@ export const closeWindow = () => invoke("close_window");
 export const param = (key: string) => new URLSearchParams(location.search).get(key);
 
 export const isMac = navigator.userAgent.includes("Mac");
+export const isWindows = navigator.userAgent.includes("Windows");
+export const isLinux = !isMac && !isWindows;
 
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {

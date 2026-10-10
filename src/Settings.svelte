@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { invoke, isMac, ready } from "./lib/api";
+  import { invoke, isLinux, isMac, isWindows, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
   type Settings = {
@@ -227,7 +227,7 @@
             <span>{tr("Launch at login")}</span>
             <input type="checkbox" bind:checked={s.launch_at_login} onchange={save} />
           </label>
-          {#if !isMac}
+          {#if isWindows}
             <label class="row">
               <span>{tr("Show tray icon")}</span>
               <input type="checkbox" bind:checked={s.show_tray} onchange={save} />
@@ -385,6 +385,9 @@
               ? `${tr("Smaller videos, less detail.")}${isMac ? " " + tr("On a Retina display, Low records at the size things appear on screen.") : ""}`
               : tr("Full detail; the largest files.")}
           </p>
+          {#if isLinux}
+            <p class="hint">{tr("Recording needs ffmpeg and an X11 session; it doesn't work on Wayland yet.")}</p>
+          {/if}
           <label class="row">
             <span>{tr("File name")}</span>
             <input class="template" type="text" spellcheck="false" bind:value={s.record_template} onchange={save} />
@@ -429,12 +432,19 @@
             </div>
           {/each}
           <p class="hint">{tr("Click a shortcut, then press the new keys. Backspace clears it, Esc cancels.")}</p>
-          {#if !isMac}
+          {#if isWindows}
             <label class="row">
               <span>{tr("Print Screen captures an area")}</span>
               <input type="checkbox" bind:checked={s.print_screen} onchange={save} />
             </label>
             <p class="hint">{tr("Replaces the Snipping Tool on the Print Screen key.")}</p>
+          {/if}
+          {#if isLinux}
+            <p class="hint">
+              {tr("On Wayland these shortcuts don't work. Add one in your system's keyboard settings that runs:")}
+              <code>kliksnap --capture area</code>
+              {tr("(or window, screen, text, record).")}
+            </p>
           {/if}
         </section>
       {/if}
