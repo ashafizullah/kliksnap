@@ -271,8 +271,13 @@ pub fn overlay_pass_scroll(app: AppHandle, state: State<AppState>) {
 }
 
 #[tauri::command]
-pub fn overlay_finish(app: AppHandle, index: usize, rect: Option<[f64; 4]>) {
-    crate::end_selection(&app, rect.map(|r| (index, r)));
+pub fn overlay_finish(
+    app: AppHandle,
+    index: usize,
+    rect: Option<[f64; 4]>,
+    text_only: Option<bool>,
+) {
+    crate::end_selection(&app, rect.map(|r| (index, r)), text_only.unwrap_or(false));
 }
 
 #[tauri::command]

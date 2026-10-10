@@ -237,7 +237,8 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
 }
 
 /// Ends an area/window selection; `rect` is in fractions of monitor `index`.
-fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
+/// `text_only`: Copy Text skips QR codes and reads only the text.
+fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>, text_only: bool) {
     let state = app.state::<AppState>();
     let frozen = std::mem::take(&mut *state.frozen.lock().unwrap());
     for win in ui::overlays(app) {
@@ -306,7 +307,7 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
             return;
         };
         let result = if mode == Mode::Text {
-            finish_text(&app, &img, &f.bounds)
+            finish_text(&app, &img, &f.bounds, text_only)
         } else {
             finish_shot(&app, img, f.bounds, Some(capture::origin(&f.bounds, rect)))
         };
@@ -316,12 +317,22 @@ fn end_selection(app: &AppHandle, selection: Option<(usize, [f64; 4])>) {
     });
 }
 
-/// Copies the QR codes in the selection, or if there are none, its text.
-fn finish_text(app: &AppHandle, img: &RgbaImage, bounds: &Bounds) -> Result<(), String> {
-    let codes = ocr::scan_codes(img).unwrap_or_else(|e| {
-        eprintln!("QR scan failed: {e}");
+/// Copies the QR codes in the selection, or if there are none (or
+/// `text_only`), its text.
+fn finish_text(
+    app: &AppHandle,
+    img: &RgbaImage,
+    bounds: &Bounds,
+    text_only: bool,
+) -> Result<(), String> {
+    let codes = if text_only {
         Vec::new()
-    });
+    } else {
+        ocr::scan_codes(img).unwrap_or_else(|e| {
+            eprintln!("QR scan failed: {e}");
+            Vec::new()
+        })
+    };
     let (title, result) = if codes.is_empty() {
         (i18n::tr("Text copied"), ocr::recognize(img))
     } else {
@@ -364,7 +375,7 @@ pub(crate) fn pick_color(app: &AppHandle, index: usize, hex: &str) -> Result<(),
         .unwrap()
         .get(index)
         .map(|f| f.bounds);
-    end_selection(app, None);
+    end_selection(app, None, false);
     let hex = hex.to_ascii_uppercase();
     arboard::Clipboard::new()
         .and_then(|mut c| c.set_text(hex.clone()))
@@ -776,7 +787,7 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
         && !state.frozen.lock().unwrap().is_empty()
     {
         // An overlay was closed some other way (e.g. ⌘W): treat it as a cancel.
-        end_selection(app, None);
+        end_selection(app, None, false);
     }
 }
 
