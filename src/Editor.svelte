@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { closeWindow, imageUrl, invoke, isMac, loadImage, param, ready } from "./lib/api";
+  import { closeWindow, imageUrl, invoke, isLinux, isMac, loadImage, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
   import {
     COLORS,
@@ -601,13 +601,16 @@
     <div class="spacer"></div>
 
     <div class="group actions">
-      <button
-        bind:this={shareButton}
-        title={isMac ? tr("Share (AirDrop, Messages, Mail…)") : tr("Share")}
-        onclick={() => exportImage("share")}
-      >
-        {tr("Share")}
-      </button>
+      <!-- Linux has no system share sheet. -->
+      {#if !isLinux}
+        <button
+          bind:this={shareButton}
+          title={isMac ? tr("Share (AirDrop, Messages, Mail…)") : tr("Share")}
+          onclick={() => exportImage("share")}
+        >
+          {tr("Share")}
+        </button>
+      {/if}
       <button title="{tr('Keep on screen')} ({mod}P)" onclick={() => exportImage("pin")}>{tr("Pin")}</button>
       <button title="{tr('Save As…')} ({mod}⇧S)" onclick={() => exportImage("saveas")}>{tr("Save As…")}</button>
       <button title="{tr('Save')} ({mod}S)" onclick={() => exportImage("save")}>{tr("Save")}</button>

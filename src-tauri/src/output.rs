@@ -139,18 +139,52 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap()
 }
 
-/// Shows the file selected in Finder or Explorer.
+/// Shows the file selected in Finder, Explorer or the Linux file manager.
 pub fn reveal(path: &Path) -> Result<(), String> {
     let mut cmd = if cfg!(target_os = "windows") {
         let mut c = std::process::Command::new("explorer");
         c.arg(format!("/select,{}", path.display()));
         c
-    } else {
+    } else if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg("-R").arg(path);
         c
+    } else {
+        // Most file managers select the file over D-Bus; the rest get its folder.
+        let shown = std::process::Command::new("dbus-send")
+            .args([
+                "--session",
+                "--dest=org.freedesktop.FileManager1",
+                "--type=method_call",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+            ])
+            .arg(format!("array:string:{}", file_uri(path)))
+            .arg("string:")
+            .status()
+            .is_ok_and(|s| s.success());
+        if shown {
+            return Ok(());
+        }
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(path.parent().unwrap_or(path));
+        c
     };
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// `file://` URI for an absolute path, percent-encoded.
+fn file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    for b in path.to_string_lossy().bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(b as char)
+            }
+            _ => uri.push_str(&format!("%{b:02X}")),
+        }
+    }
+    uri
 }
 
 /// Uncompressed 32-bit BMP. Webviews decode it natively and it costs almost
@@ -227,6 +261,14 @@ mod tests {
         assert_eq!(
             file_name_at("", DEFAULT_RECORDING_TEMPLATE, "mp4", at()),
             "KlikSnap Recording 2026-10-09 at 07.05.03.mp4"
+        );
+    }
+
+    #[test]
+    fn file_uri_escapes() {
+        assert_eq!(
+            file_uri(Path::new("/home/a/KlikSnap 1,2.png")),
+            "file:///home/a/KlikSnap%201%2C2.png"
         );
     }
 

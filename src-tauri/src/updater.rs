@@ -72,8 +72,10 @@ pub fn open_notes() -> Result<(), String> {
     let url = release_url(&version.ok_or("no update")?);
     let program = if cfg!(target_os = "windows") {
         "explorer"
-    } else {
+    } else if cfg!(target_os = "macos") {
         "open"
+    } else {
+        "xdg-open"
     };
     std::process::Command::new(program)
         .arg(url)

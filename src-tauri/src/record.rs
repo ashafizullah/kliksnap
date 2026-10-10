@@ -2,7 +2,8 @@
 //! ScreenCaptureKit + AVAssetWriter on macOS, Windows Graphics Capture +
 //! Media Foundation on Windows. A `.gif` path records an animated GIF
 //! instead, from the same frames. MP4s can carry the system's sound and the
-//! microphone.
+//! microphone. Linux has no such encoder to rely on: there it runs ffmpeg,
+//! which can grab X11 but not yet Wayland.
 
 use std::path::Path;
 
@@ -1037,26 +1038,173 @@ mod imp {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod imp {
-    use super::Region;
+    use std::io::{Read, Write};
+    use std::path::Path;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use super::{Audio, Region};
     use crate::capture::Bounds;
 
-    pub struct Recorder;
+    pub struct Recorder {
+        child: Child,
+    }
 
     pub fn microphone_allowed() -> bool {
-        false
+        true
     }
 
     impl Recorder {
-        pub fn start(
-            _b: &Bounds,
-            _r: Region,
-            _path: &std::path::Path,
-            _audio: super::Audio,
-        ) -> Result<Self, String> {
-            Err("screen recording isn't supported here".into())
+        pub fn start(b: &Bounds, r: Region, path: &Path, audio: Audio) -> Result<Self, String> {
+            if std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland") {
+                return Err("recording on Wayland isn't supported yet: log in with an X11 (Xorg) session to record".into());
+            }
+            let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
+            let mut cmd = Command::new("ffmpeg");
+            cmd.args(args(b, r, path, audio, &display))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped());
+            let mut child = cmd.spawn().map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    "Recording needs ffmpeg: install the ffmpeg package".to_string()
+                }
+                _ => e.to_string(),
+            })?;
+            // A bad display, region or sound device ends ffmpeg right away.
+            std::thread::sleep(Duration::from_millis(600));
+            if let Ok(Some(_)) = child.try_wait() {
+                let mut err = String::new();
+                if let Some(mut s) = child.stderr.take() {
+                    let _ = s.read_to_string(&mut err);
+                }
+                return Err(format!("ffmpeg: {}", err.trim()));
+            }
+            Ok(Recorder { child })
         }
-        pub fn stop(self) -> Result<(), String> {
-            Ok(())
+
+        pub fn stop(mut self) -> Result<(), String> {
+            // `q` makes ffmpeg finish the file properly.
+            if let Some(mut stdin) = self.child.stdin.take() {
+                let _ = stdin.write_all(b"q");
+            }
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < deadline {
+                match self.child.try_wait() {
+                    Ok(Some(status)) if status.success() => return Ok(()),
+                    Ok(Some(status)) => return Err(format!("ffmpeg ended with {status}")),
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            let _ = self.child.kill();
+            Err("ffmpeg didn't finish the recording".into())
+        }
+    }
+
+    /// ffmpeg's arguments: X11 grab of the region (pixels on Linux), scaled
+    /// to the output size; sound from PulseAudio or PipeWire's Pulse server,
+    /// mixed into one track as on Windows.
+    pub(super) fn args(
+        b: &Bounds,
+        r: Region,
+        path: &Path,
+        audio: Audio,
+        display: &str,
+    ) -> Vec<String> {
+        let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-y"]
+            .map(String::from)
+            .to_vec();
+        let (x, y) = (b.x + r.x as i32, b.y + r.y as i32);
+        a.extend([
+            "-f".into(),
+            "x11grab".into(),
+            "-framerate".into(),
+            super::FPS.to_string(),
+            "-video_size".into(),
+            format!("{}x{}", r.w as u32, r.h as u32),
+            "-i".into(),
+            format!("{display}+{x},{y}"),
+        ]);
+        let (w, h) = (r.px_w, r.px_h);
+        if super::is_gif(path) {
+            a.extend([
+                "-filter_complex".into(),
+                format!(
+                    "[0:v]fps={},scale={w}:{h}:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse",
+                    crate::gif_writer::FPS
+                ),
+                "-an".into(),
+            ]);
+        } else {
+            let mut sources = Vec::new();
+            if audio.system {
+                sources.push("@DEFAULT_MONITOR@");
+            }
+            if audio.mic {
+                sources.push("default");
+            }
+            for s in &sources {
+                a.extend(["-f", "pulse", "-i", s].map(String::from));
+            }
+            let mut graph = format!("[0:v]scale={w}:{h}[v]");
+            match sources.len() {
+                0 => {}
+                1 => graph.push_str(";[1:a]anull[a]"),
+                _ => graph.push_str(";[1:a][2:a]amix=inputs=2[a]"),
+            }
+            a.extend(["-filter_complex".into(), graph, "-map".into(), "[v]".into()]);
+            if !sources.is_empty() {
+                a.extend(["-map", "[a]", "-c:a", "aac", "-b:a", "160k"].map(String::from));
+            }
+            a.extend(
+                [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "23",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                ]
+                .map(String::from),
+            );
+        }
+        a.push(path.display().to_string());
+        a
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn ffmpeg_args_grab_the_region() {
+            let b = Bounds {
+                x: 1920,
+                y: 0,
+                w: 1920,
+                h: 1080,
+                scale: 1.0,
+            };
+            let r = crate::record::region(&b, [0.5, 0.5, 0.25, 0.25], 50);
+            let audio = Audio {
+                system: true,
+                mic: true,
+            };
+            let a = args(&b, r, Path::new("/tmp/a.mp4"), audio, ":1").join(" ");
+            assert!(a.contains("-video_size 480x270 -i :1+2880,540"), "{a}");
+            let graph = format!(
+                "[0:v]scale={}:{}[v];[1:a][2:a]amix=inputs=2[a]",
+                r.px_w, r.px_h
+            );
+            assert!(a.contains(&graph), "{a}");
+            assert!(a.ends_with("/tmp/a.mp4"));
+            let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), ":1").join(" ");
+            assert!(gif.contains("palettegen") && gif.contains("-an"), "{gif}");
         }
     }
 }

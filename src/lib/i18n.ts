@@ -57,6 +57,12 @@ const ID: Record<string, string> = {
   Screenshot: "Tangkapan layar",
   "Show in folder": "Tampilkan di folder",
   "Click to show in {app}": "Klik untuk menampilkan di {app}",
+  "the file manager": "pengelola file",
+  "On Wayland these shortcuts don't work. Add one in your system's keyboard settings that runs:":
+    "Di Wayland pintasan ini tidak berfungsi. Tambahkan pintasan di pengaturan keyboard sistem yang menjalankan:",
+  "(or window, screen, text, record).": "(atau window, screen, text, record).",
+  "Recording needs ffmpeg and an X11 session; it doesn't work on Wayland yet.":
+    "Merekam butuh ffmpeg dan sesi X11; belum berfungsi di Wayland.",
   "Click to cancel": "Klik untuk membatalkan",
   "Recording time": "Durasi rekaman",
   Stop: "Stop",

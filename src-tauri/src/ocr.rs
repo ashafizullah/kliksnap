@@ -1,7 +1,7 @@
 //! Text and QR code recognition. Text uses the OCR engine built into the OS
 //! (Apple Vision on macOS, Windows.Media.Ocr on Windows), so it adds nothing to
-//! the app size. QR codes use Vision on macOS and `rqrr` on Windows, which has
-//! no built-in decoder.
+//! the app size; Linux has none, so it runs Tesseract when it's installed. QR
+//! codes use Vision on macOS and `rqrr` elsewhere.
 
 use xcap::image::RgbaImage;
 
@@ -47,6 +47,24 @@ fn word_ranges(s: &str) -> Vec<(usize, usize)> {
 /// The payloads of the QR codes (and on macOS, other barcodes) in the image.
 pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
     imp::scan_codes(img)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn scan_qr(img: &RgbaImage) -> Result<Vec<String>, String> {
+    let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(
+        img.width() as usize,
+        img.height() as usize,
+        |x, y| {
+            let [r, g, b, _] = img.get_pixel(x as u32, y as u32).0;
+            ((r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000) as u8
+        },
+    );
+    Ok(prepared
+        .detect_grids()
+        .into_iter()
+        .filter_map(|grid| grid.decode().ok())
+        .map(|(_, content)| content)
+        .collect())
 }
 
 #[cfg(target_os = "macos")]
@@ -368,37 +386,143 @@ mod imp {
     }
 
     pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
-        let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(
-            img.width() as usize,
-            img.height() as usize,
-            |x, y| {
-                let [r, g, b, _] = img.get_pixel(x as u32, y as u32).0;
-                ((r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000) as u8
-            },
-        );
-        Ok(prepared
-            .detect_grids()
-            .into_iter()
-            .filter_map(|grid| grid.decode().ok())
-            .map(|(_, content)| content)
-            .collect())
+        super::scan_qr(img)
     }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod imp {
-    use xcap::image::RgbaImage;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
 
-    pub fn recognize(_img: &RgbaImage) -> Result<String, String> {
-        Err("text recognition is not supported on this platform".into())
+    use xcap::image::{imageops, RgbaImage};
+
+    use crate::output::{self, Format};
+
+    const MISSING: &str = "Copy Text needs Tesseract: install the tesseract-ocr package";
+
+    pub fn recognize(img: &RgbaImage) -> Result<String, String> {
+        let (text, _) = run(img, false)?;
+        Ok(text
+            .trim_matches(|c: char| c == '\u{c}' || c.is_whitespace())
+            .to_string())
     }
 
-    pub fn scan_codes(_img: &RgbaImage) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
+    pub fn scan_codes(img: &RgbaImage) -> Result<Vec<String>, String> {
+        super::scan_qr(img)
     }
 
-    pub fn words(_img: &RgbaImage) -> Result<Vec<super::Word>, String> {
-        Err("text recognition is not supported on this platform".into())
+    pub fn words(img: &RgbaImage) -> Result<Vec<super::Word>, String> {
+        let (tsv, k) = run(img, true)?;
+        Ok(parse_tsv(&tsv, k))
+    }
+
+    /// Tesseract's output for the image, and how much the image was enlarged
+    /// for it: it reads screen-sized text far better at twice the size.
+    fn run(img: &RgbaImage, tsv: bool) -> Result<(String, f64), String> {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let k = if img.width().max(img.height()) < 2000 {
+            2
+        } else {
+            1
+        };
+        let big;
+        let img = if k > 1 {
+            big = imageops::resize(
+                img,
+                img.width() * k,
+                img.height() * k,
+                imageops::FilterType::Triangle,
+            );
+            &big
+        } else {
+            img
+        };
+        let path = std::env::temp_dir().join(format!(
+            "kliksnap-ocr-{}-{}.png",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        output::save(img, &path, Format::Png)?;
+        let mut cmd = Command::new("tesseract");
+        cmd.arg(&path).arg("stdout").args(["-l", langs()]);
+        if tsv {
+            cmd.arg("tsv");
+        }
+        let out = cmd.output();
+        let _ = std::fs::remove_file(&path);
+        let out = out.map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => MISSING.to_string(),
+            _ => e.to_string(),
+        })?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok((String::from_utf8_lossy(&out.stdout).into_owned(), k as f64))
+    }
+
+    /// English and Indonesian, as far as they're installed.
+    fn langs() -> &'static str {
+        static LANGS: OnceLock<String> = OnceLock::new();
+        LANGS.get_or_init(|| {
+            let listed = Command::new("tesseract")
+                .arg("--list-langs")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            let have: Vec<&str> = listed.lines().map(str::trim).collect();
+            let picked: Vec<&str> = ["eng", "ind"]
+                .into_iter()
+                .filter(|l| have.contains(l))
+                .collect();
+            if picked.is_empty() {
+                "eng".into()
+            } else {
+                picked.join("+")
+            }
+        })
+    }
+
+    /// The words in Tesseract's TSV, with their boxes divided by `k`.
+    pub(super) fn parse_tsv(tsv: &str, k: f64) -> Vec<super::Word> {
+        let mut words = Vec::new();
+        let mut last_line = None;
+        let mut line = 0;
+        for row in tsv.lines().skip(1) {
+            let f: Vec<&str> = row.splitn(12, '\t').collect();
+            if f.len() < 12 || f[0] != "5" || f[11].trim().is_empty() {
+                continue;
+            }
+            let n = |i: usize| f[i].parse::<f64>().unwrap_or(0.0);
+            let key = (f[1], f[2], f[3], f[4]);
+            if last_line.is_some_and(|l| l != key) {
+                line += 1;
+            }
+            last_line = Some(key);
+            words.push(super::Word {
+                text: f[11].trim().to_string(),
+                rect: [n(6) / k, n(7) / k, n(8) / k, n(9) / k],
+                line,
+            });
+        }
+        words
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn parses_words_and_lines() {
+            let tsv = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+                4\t1\t1\t1\t1\t0\t10\t10\t200\t20\t-1\t\n\
+                5\t1\t1\t1\t1\t1\t10\t10\t80\t20\t96\tHello\n\
+                5\t1\t1\t1\t1\t2\t100\t10\t80\t20\t95\tworld\n\
+                5\t1\t1\t1\t2\t1\t10\t40\t60\t20\t91\tagain\n";
+            let words = super::parse_tsv(tsv, 2.0);
+            let got: Vec<_> = words.iter().map(|w| (w.text.as_str(), w.line)).collect();
+            assert_eq!(got, [("Hello", 0), ("world", 0), ("again", 1)]);
+            assert_eq!(words[1].rect, [50.0, 5.0, 40.0, 10.0]);
+        }
     }
 }
 

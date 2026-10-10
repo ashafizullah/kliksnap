@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { closeWindow, invoke, isMac, ready } from "./lib/api";
+  import { closeWindow, invoke, isMac, isWindows, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
   // An empty `text` means nothing was copied and `title` says why.
@@ -28,7 +28,7 @@
     <p class:one-line={toast.path}>{toast.text}</p>
   {/if}
   {#if toast.path}
-    <p class="action">{tr("Click to show in {app}", { app: isMac ? "Finder" : "Explorer" })}</p>
+    <p class="action">{tr("Click to show in {app}", { app: isMac ? "Finder" : isWindows ? "Explorer" : tr("the file manager") })}</p>
   {/if}
 </div>
 

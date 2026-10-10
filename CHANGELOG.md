@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.10.0
+
+### New
+
+- Linux (beta): `.deb`, `.rpm` and AppImage for x86_64. Screenshots, the editor, pins, history, QR codes and scrolling capture work; Copy Text uses Tesseract and recording uses ffmpeg when they're installed. On Wayland, global shortcuts and recording don't work yet: bind `kliksnap --capture area` (or `window`, `screen`, `text`) to a shortcut in your desktop settings
+- `kliksnap --capture <mode>` starts a capture from the command line or a desktop shortcut, on every platform
+
 ## 0.9.6
 
 ### New
