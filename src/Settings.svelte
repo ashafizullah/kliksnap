@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { invoke, isLinux, isMac, isWindows, ready } from "./lib/api";
+  import { listen } from "@tauri-apps/api/event";
+  import { invoke, isLinux, isMac, isWindows, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
   type Settings = {
@@ -31,7 +32,10 @@
     check_updates: boolean;
     show_tray: boolean;
     language: "auto" | "en" | "id";
+    ai_profiles: AiProfile[];
+    ai_profile: number;
   };
+  type AiProfile = { name: string; base_url: string; api_key: string; model: string };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
@@ -44,14 +48,17 @@
     { field: "hotkey_scroll", label: "Scrolling capture" },
   ];
 
-  type Tab = "general" | "capture" | "recording" | "shortcuts";
+  type Tab = "general" | "capture" | "recording" | "shortcuts" | "ai";
   const TABS: { id: Tab; label: string }[] = [
     { id: "general", label: "General" },
     { id: "capture", label: "Capture" },
     { id: "recording", label: "Recording" },
     { id: "shortcuts", label: "Shortcuts" },
+    { id: "ai", label: "AI" },
   ];
-  let tab = $state<Tab>("general");
+  const isTab = (id: string | null): id is Tab => TABS.some((t) => t.id === id);
+  const initialTab = param("tab");
+  let tab = $state<Tab>(isTab(initialTab) ? initialTab : "general");
 
   function selectTab(id: Tab) {
     recording = null;
@@ -87,6 +94,50 @@
       updateStatus = { text: String(e), failed: true };
     } finally {
       checking = false;
+    }
+  }
+
+  let testing = $state(false);
+  let aiStatus = $state<{ text: string; failed: boolean } | null>(null);
+
+  const ai = $derived(s?.ai_profiles[s.ai_profile]);
+  const aiReady = $derived(!!ai?.base_url.trim() && !!ai?.model.trim());
+
+  function selectProfile() {
+    aiStatus = null;
+    save();
+  }
+
+  function addProfile() {
+    if (!s) return;
+    s.ai_profiles.push({
+      name: tr("Profile {n}", { n: s.ai_profiles.length + 1 }),
+      base_url: "https://api.openai.com/v1",
+      api_key: "",
+      model: "",
+    });
+    s.ai_profile = s.ai_profiles.length - 1;
+    selectProfile();
+  }
+
+  function deleteProfile() {
+    if (!s || s.ai_profiles.length < 2) return;
+    s.ai_profiles.splice(s.ai_profile, 1);
+    s.ai_profile = Math.min(s.ai_profile, s.ai_profiles.length - 1);
+    selectProfile();
+  }
+
+  async function testAi() {
+    if (!ai) return;
+    testing = true;
+    aiStatus = null;
+    try {
+      const text = await invoke<string>("test_ai", { profile: $state.snapshot(ai) });
+      aiStatus = { text, failed: false };
+    } catch (e) {
+      aiStatus = { text: String(e), failed: true };
+    } finally {
+      testing = false;
     }
   }
 
@@ -174,10 +225,17 @@
     }
   }
 
-  onMount(async () => {
-    [s, version] = await Promise.all([invoke<Settings>("get_settings"), invoke<string>("app_version")]);
-    await tick();
-    ready();
+  onMount(() => {
+    // Sent when something asks for a tab while Settings is already open.
+    const unlisten = listen<string>("settings:tab", (e) => {
+      if (isTab(e.payload)) selectTab(e.payload);
+    });
+    (async () => {
+      [s, version] = await Promise.all([invoke<Settings>("get_settings"), invoke<string>("app_version")]);
+      await tick();
+      ready();
+    })();
+    return () => unlisten.then((off) => off());
   });
 </script>
 
@@ -416,6 +474,57 @@
               : tr("Both are mixed into one track. GIFs have no sound.")}
           </p>
         </section>
+      {:else if tab === "ai"}
+        <section>
+          <h2>{tr("AI model")}</h2>
+          <p class="hint">{tr("Any OpenAI-compatible API, with your own key: OpenAI, OpenRouter, Groq, Ollama and others.")}</p>
+          <div class="row">
+            <span>{tr("Profile")}</span>
+            <div class="controls">
+              <select bind:value={s.ai_profile} onchange={selectProfile} aria-label={tr("Profile")}>
+                {#each s.ai_profiles as p, i (i)}
+                  <option value={i}>{p.name.trim() || tr("Untitled")}</option>
+                {/each}
+              </select>
+              <button class="secondary icon" title={tr("Add profile")} aria-label={tr("Add profile")} onclick={addProfile}>+</button>
+              <button
+                class="secondary icon"
+                title={tr("Delete profile")}
+                aria-label={tr("Delete profile")}
+                disabled={s.ai_profiles.length < 2}
+                onclick={deleteProfile}>−</button
+              >
+            </div>
+          </div>
+          {#if ai}
+            <label class="row">
+              <span>{tr("Name")}</span>
+              <input class="template" type="text" spellcheck="false" bind:value={ai.name} onchange={save} />
+            </label>
+            <label class="row">
+              <span>{tr("Base URL")}</span>
+              <input class="template" type="url" spellcheck="false" placeholder="https://api.openai.com/v1" bind:value={ai.base_url} onchange={save} />
+            </label>
+            <label class="row">
+              <span>{tr("API key")}</span>
+              <input class="template" type="password" spellcheck="false" autocomplete="off" placeholder="sk-…" bind:value={ai.api_key} onchange={save} />
+            </label>
+            <label class="row">
+              <span>{tr("Model")}</span>
+              <input class="template" type="text" spellcheck="false" placeholder="gpt-4o-mini" bind:value={ai.model} onchange={save} />
+            </label>
+          {/if}
+          <p class="hint">{tr("Make sure the model can read images (vision); KlikSnap sends it your screenshots.")}</p>
+          <div class="row">
+            <span>{tr("Check the model reads an image")}</span>
+            <button class="secondary" disabled={testing || !aiReady} onclick={testAi}>
+              {testing ? tr("Testing…") : tr("Test")}
+            </button>
+          </div>
+          {#if aiStatus}
+            <p class="hint" class:error={aiStatus.failed} role="status">{aiStatus.text}</p>
+          {/if}
+        </section>
       {:else}
         <section>
           <h2>{tr("Shortcuts")}</h2>
@@ -528,6 +637,18 @@
     letter-spacing: 0.04em;
     color: var(--muted);
     margin: 10px 0 4px;
+  }
+  .controls {
+    display: flex;
+    gap: 6px;
+  }
+  .secondary.icon {
+    min-width: 26px;
+    padding: 0;
+  }
+  .secondary:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .row {
     display: flex;

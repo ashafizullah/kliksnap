@@ -40,6 +40,7 @@
   });
   const edit = () => invoke("edit_shot", { id });
   const pin = () => invoke("pin_shot", { id }).catch((e) => flash(String(e)));
+  const explain = () => invoke("explain_shot", { id }).catch((e) => flash(String(e)));
 
   function setHover(on: boolean) {
     if (on === hovering) return;
@@ -78,7 +79,10 @@
     <button class="close" title={tr("Close")} aria-label={tr("Close")} onclick={closeWindow}>
       <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
     </button>
-    <button class="edit" onclick={edit}>{tr("Annotate")}</button>
+    <div class="row top">
+      <button class="edit" onclick={edit}>{tr("Annotate")}</button>
+      <button class="edit" title={tr("Explain with AI")} onclick={explain}>{tr("Explain")}</button>
+    </div>
     <div class="row">
       <button onclick={copy}>{tr("Copy")}</button>
       <button onclick={save}>{tr("Save")}</button>
@@ -152,6 +156,13 @@
   }
   .row button {
     min-width: 62px;
+  }
+  .top button {
+    flex: 1;
+    min-width: 0;
+  }
+  .top {
+    width: 202px;
   }
   .close {
     position: absolute;

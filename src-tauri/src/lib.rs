@@ -1,3 +1,4 @@
+mod ai;
 #[cfg(any(target_os = "windows", test))]
 mod audio_mix;
 mod capture;
@@ -783,7 +784,10 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
         if let Some((_, bounds)) = previews.last().and_then(|&newest| state.shot(newest)) {
             ui::stack_previews(app, &previews, &bounds);
         }
-    } else if label.starts_with("editor-") || label.starts_with("pin-") {
+    } else if ["editor-", "pin-", "explain-"]
+        .iter()
+        .any(|p| label.starts_with(p))
+    {
         if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
         }
@@ -896,6 +900,11 @@ pub fn run() {
             commands::capture,
             commands::toast_text,
             commands::check_updates,
+            commands::test_ai,
+            commands::explain_shot,
+            commands::explain,
+            commands::ai_profiles,
+            commands::open_ai_settings,
             commands::update_info,
             commands::update_install,
             commands::update_notes,

@@ -495,13 +495,50 @@ pub fn open_history(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Opens an AI explanation of a shot, centered on its screen. Returns the window label.
+pub fn open_explain(app: &AppHandle, id: u32, b: &Bounds) -> tauri::Result<String> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let label = format!(
+        "explain-{}",
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let area = work_area(app, b);
+    let (_, max_h) = area.logical_size();
+    let (w, h) = (520.0, (max_h * 0.8).min(640.0));
+    let url = format!("explain.html?id={id}");
+    let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("KlikSnap AI")
+        // Like Settings: stays beside whatever you're fixing from the answer.
+        .always_on_top(true)
+        .inner_size(w, h)
+        .min_inner_size(360.0, 320.0)
+        .visible(false)
+        .build()?;
+    let x = area.x + (area.w - area.n(w)) / 2.0;
+    let y = area.y + (area.h - area.n(h)) / 2.0;
+    place(&win, &area, x, y, w, h);
+    Ok(label)
+}
+
 pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
+    open_settings_tab(app, "general")
+}
+
+/// Opens Settings on a tab, or switches the open window to it.
+pub fn open_settings_tab(app: &AppHandle, tab: &str) -> tauri::Result<()> {
     if let Some(win) = app.get_webview_window("settings") {
+        if tab != "general" {
+            win.emit("settings:tab", tab)?;
+        }
         win.show()?;
         return win.set_focus();
     }
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
+    let url = format!("settings.html?tab={tab}");
+    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("KlikSnap Settings")
+        // Stays visible while you fetch something from another app, such as
+        // an API key: KlikSnap has no Dock icon or ⌘Tab entry to bring it back.
+        .always_on_top(true)
         .inner_size(460.0, 560.0)
         .resizable(false)
         .maximizable(false)

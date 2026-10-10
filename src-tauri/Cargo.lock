@@ -2526,6 +2526,7 @@ name = "kliksnap"
 version = "0.10.1"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "block2",
  "chrono",
  "cpal",
@@ -2539,7 +2540,9 @@ dependencies = [
  "objc2-core-video",
  "objc2-foundation",
  "objc2-screen-capture-kit",
+ "reqwest",
  "rqrr",
+ "rustls",
  "serde",
  "serde_json",
  "sys-locale",

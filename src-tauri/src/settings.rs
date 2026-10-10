@@ -59,6 +59,9 @@ pub struct Settings {
     pub show_tray: bool,
     /// "auto" (the system's language), "en" or "id".
     pub language: String,
+    pub ai_profiles: Vec<crate::ai::Profile>,
+    /// Index of the profile in use.
+    pub ai_profile: usize,
 }
 
 impl Default for Settings {
@@ -91,6 +94,8 @@ impl Default for Settings {
             check_updates: true,
             show_tray: true,
             language: "auto".into(),
+            ai_profiles: vec![crate::ai::Profile::openai()],
+            ai_profile: 0,
         }
     }
 }
@@ -111,6 +116,20 @@ impl Settings {
     /// A recording's file name; `ext` is "mp4" or "gif".
     pub fn recording_name(&self, ext: &str) -> String {
         output::recording_name(&self.record_template, ext)
+    }
+
+    /// Keeps at least one AI profile, with a valid one in use.
+    pub fn normalize(mut self) -> Self {
+        if self.ai_profiles.is_empty() {
+            self.ai_profiles.push(crate::ai::Profile::openai());
+        }
+        self.ai_profile = self.ai_profile.min(self.ai_profiles.len() - 1);
+        self
+    }
+
+    /// The AI profile in use, or `index` when given.
+    pub fn ai(&self, index: Option<usize>) -> Option<&crate::ai::Profile> {
+        self.ai_profiles.get(index.unwrap_or(self.ai_profile))
     }
 
     pub fn save_dir(&self, app: &AppHandle) -> PathBuf {
@@ -134,7 +153,12 @@ fn file(app: &AppHandle) -> Option<PathBuf> {
 /// Returns the settings and whether this is the first launch.
 pub fn load(app: &AppHandle) -> (Settings, bool) {
     match file(app).and_then(|p| std::fs::read_to_string(p).ok()) {
-        Some(json) => (serde_json::from_str(&json).unwrap_or_default(), false),
+        Some(json) => (
+            serde_json::from_str::<Settings>(&json)
+                .unwrap_or_default()
+                .normalize(),
+            false,
+        ),
         None => (Settings::default(), true),
     }
 }
@@ -146,4 +170,18 @@ pub fn store(app: &AppHandle, s: &Settings) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_keeps_a_valid_ai_profile() {
+        let s: Settings = serde_json::from_str(r#"{"ai_profiles": [], "ai_profile": 3}"#).unwrap();
+        let s = s.normalize();
+        assert_eq!(s.ai_profiles.len(), 1);
+        assert_eq!(s.ai_profile, 0);
+        assert!(s.ai(None).is_some());
+    }
 }

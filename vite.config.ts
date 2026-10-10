@@ -21,6 +21,7 @@ export default defineConfig({
         countdown: "countdown.html",
         recording: "recording.html",
         scroll: "scroll.html",
+        explain: "explain.html",
       },
     },
   },
