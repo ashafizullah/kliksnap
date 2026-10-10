@@ -147,6 +147,14 @@ impl AppState {
     }
 }
 
+/// `--capture <mode>` on the command line (`kliksnap --capture area`), so a
+/// desktop shortcut can drive KlikSnap where global shortcuts don't work, as
+/// on Wayland. Launching it again hands the arguments to the running app.
+fn capture_arg(args: &[String]) -> Option<Mode> {
+    let i = args.iter().position(|a| a == "--capture")?;
+    serde_json::from_value(serde_json::Value::String(args.get(i + 1)?.clone())).ok()
+}
+
 pub fn start_capture(app: &AppHandle, mode: Mode) {
     let state = app.state::<AppState>();
     // The record shortcut and menu items stop a recording in progress.
@@ -796,9 +804,14 @@ pub fn run() {
     tauri::Builder::default()
         // First, so a second launch exits before setting anything up. It opens
         // Settings instead, the way back in when the tray icon is hidden.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            let _ = ui::open_settings(app);
-        }))
+        .plugin(tauri_plugin_single_instance::init(
+            |app, args, _| match capture_arg(&args) {
+                Some(mode) => start_capture(app, mode),
+                None => {
+                    let _ = ui::open_settings(app);
+                }
+            },
+        ))
         .plugin(hotkeys::plugin())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -837,6 +850,11 @@ pub fn run() {
             if first_run {
                 let _ = settings::store(app.handle(), &s);
                 ui::open_settings(app.handle())?;
+            }
+            if let Some(mode) = capture_arg(&std::env::args().collect::<Vec<_>>()) {
+                let handle = app.handle().clone();
+                app.handle()
+                    .run_on_main_thread(move || start_capture(&handle, mode))?;
             }
             Ok(())
         })
@@ -895,4 +913,25 @@ pub fn run() {
                 api.prevent_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_arg_reads_the_mode() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            capture_arg(&args(&["kliksnap", "--capture", "area"])),
+            Some(Mode::Area)
+        );
+        assert_eq!(
+            capture_arg(&args(&["kliksnap", "--capture", "record_gif"])),
+            Some(Mode::RecordGif)
+        );
+        assert_eq!(capture_arg(&args(&["kliksnap", "--capture"])), None);
+        assert_eq!(capture_arg(&args(&["kliksnap", "--capture", "nope"])), None);
+        assert_eq!(capture_arg(&args(&["kliksnap"])), None);
+    }
 }
