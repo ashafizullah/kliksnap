@@ -519,17 +519,22 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     }
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, PartialEq, serde::Serialize)]
 struct ScrollProgress {
     height: usize,
     /// The last frame didn't line up: scrolled too fast or upwards.
     lost: bool,
     full: bool,
+    /// KlikSnap scrolls; otherwise the user does.
+    auto: bool,
+    /// macOS: auto-scroll waits for Accessibility, so this one is by hand.
+    needs_permission: bool,
 }
 
-/// Captures `rect` (fractions of the monitor at `bounds`) again and again
-/// while the user scrolls it, stitching the frames, until Done or Cancel in
-/// the controls. Blocking: call off the main thread.
+/// Captures `rect` (fractions of the monitor at `bounds`) as it scrolls,
+/// stitching the frames, until the end of the content, Done or Cancel.
+/// KlikSnap scrolls when the platform lets it; otherwise the user does.
+/// Blocking: call off the main thread.
 fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(), String> {
     let state = app.state::<AppState>();
     let session = ScrollSession {
@@ -551,20 +556,61 @@ fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(),
         let grab = || capture::under_overlay(&bounds, controls.load(Ordering::SeqCst), rect);
         let first = grab().ok_or("couldn't capture the area")?;
         let mut stitcher = stitch::Stitcher::new(&first);
-        let mut last = None;
+        let auto = platform::can_scroll();
+        let mut progress = ScrollProgress {
+            height: stitcher.height(),
+            lost: false,
+            full: false,
+            auto,
+            needs_permission: !auto && cfg!(target_os = "macos"),
+        };
+        let _ = app.emit_to("scroll", "scroll:progress", progress.clone());
+        let report = |progress: &mut ScrollProgress, step: &stitch::Step, height: usize| {
+            let next = ScrollProgress {
+                height,
+                lost: *step == stitch::Step::Lost,
+                full: *step == stitch::Step::Full,
+                ..progress.clone()
+            };
+            if next != *progress {
+                *progress = next;
+                let _ = app.emit_to("scroll", "scroll:progress", progress.clone());
+            }
+        };
+        if auto {
+            let at = (
+                bounds.x as f64 + (rect[0] + rect[2] / 2.0) * bounds.w as f64,
+                bounds.y as f64 + (rect[1] + rect[3] / 2.0) * bounds.h as f64,
+            );
+            // macOS scrolls in points, Windows in wheel notches: start small,
+            // then size the steps from how far the first one moved.
+            let start = if cfg!(target_os = "macos") {
+                (rect[3] * bounds.h as f64 * 0.3).max(1.0) as i32
+            } else {
+                1
+            };
+            let done = auto_scroll(
+                &mut stitcher,
+                &stop,
+                start,
+                |units| platform::scroll_at(at, units),
+                || settle(&grab, &stop),
+                |step, height| report(&mut progress, step, height),
+            );
+            if done {
+                stop.store(SCROLL_DONE, Ordering::SeqCst);
+            }
+            // Lost its place: the user scrolls the rest.
+            if !done && stop.load(Ordering::SeqCst) == 0 {
+                progress.auto = false;
+                let _ = app.emit_to("scroll", "scroll:progress", progress.clone());
+            }
+        }
         while stop.load(Ordering::SeqCst) == 0 {
-            std::thread::sleep(Duration::from_millis(80));
+            std::thread::sleep(Duration::from_millis(40));
             let Some(frame) = grab() else { continue };
             let step = stitcher.push(&frame);
-            let progress = ScrollProgress {
-                height: stitcher.height(),
-                lost: step == stitch::Step::Lost,
-                full: step == stitch::Step::Full,
-            };
-            if last.as_ref() != Some(&(progress.height, progress.lost, progress.full)) {
-                last = Some((progress.height, progress.lost, progress.full));
-                let _ = app.emit_to("scroll", "scroll:progress", progress);
-            }
+            report(&mut progress, &step, stitcher.height());
         }
         Ok(stitcher)
     })();
@@ -577,6 +623,83 @@ fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(),
         finish_shot(app, stitcher.finish(), bounds, None)?;
     }
     Ok(())
+}
+
+/// The next frame once the content stops moving: smooth scrolling and
+/// lazy loading settle first. None when stopped or the capture fails.
+fn settle(
+    grab: &impl Fn() -> Option<RgbaImage>,
+    stop: &std::sync::atomic::AtomicU8,
+) -> Option<RgbaImage> {
+    let started = std::time::Instant::now();
+    let mut last = grab()?;
+    while started.elapsed() < Duration::from_millis(1500) {
+        std::thread::sleep(Duration::from_millis(70));
+        if stop.load(Ordering::SeqCst) != 0 {
+            return None;
+        }
+        let frame = grab()?;
+        if frame.as_raw() == last.as_raw() {
+            return Some(frame);
+        }
+        last = frame;
+    }
+    Some(last)
+}
+
+/// Scrolls and stitches until the content stops moving (true: the end was
+/// reached), or until stopped, or until it can't keep its place (false: the
+/// user takes over). `scroll` takes platform units, positive down; steps aim
+/// at half the region, measured from how far each one moved.
+fn auto_scroll(
+    stitcher: &mut stitch::Stitcher,
+    stop: &std::sync::atomic::AtomicU8,
+    start: i32,
+    scroll: impl Fn(i32),
+    next: impl Fn() -> Option<RgbaImage>,
+    mut report: impl FnMut(&stitch::Step, usize),
+) -> bool {
+    let target = stitcher.region_height() as f64 * 0.5;
+    let first_height = stitcher.height();
+    let (mut units, mut still, mut misses) = (start.max(1), 0, 0);
+    // Flipped once if the first steps move nothing: the platform's sign for
+    // "down" may differ, and the page may start at its top either way.
+    let (mut dir, mut flipped) = (1, false);
+    while stop.load(Ordering::SeqCst) == 0 {
+        scroll(dir * units);
+        let Some(frame) = next() else { return false };
+        let step = stitcher.push(&frame);
+        report(&step, stitcher.height());
+        match step {
+            stitch::Step::Added(dy) if dy > 0 => {
+                (still, misses) = (0, 0);
+                let per_unit = dy as f64 / units as f64;
+                units = ((target / per_unit).round() as i32).clamp(1, units.max(1) * 4);
+            }
+            stitch::Step::Added(_) | stitch::Step::Full => return true,
+            // Twice without moving: the end of the content.
+            stitch::Step::Same => {
+                if !flipped && stitcher.height() == first_height {
+                    (dir, flipped) = (-dir, true);
+                    continue;
+                }
+                still += 1;
+                if still >= 2 {
+                    return true;
+                }
+            }
+            // Too far for the frames to overlap: back up, take smaller steps.
+            stitch::Step::Lost => {
+                misses += 1;
+                scroll(-dir * units);
+                if misses > 3 || next().is_none() {
+                    return false;
+                }
+                units = (units / 2).max(1);
+            }
+        }
+    }
+    false
 }
 
 /// The Done and Cancel buttons of a scrolling capture.
@@ -912,6 +1035,7 @@ pub fn run() {
             commands::overlay_windows,
             commands::overlay_finish,
             commands::overlay_pass_scroll,
+            commands::overlay_focus,
             commands::overlay_cursor,
             commands::overlay_loupe,
             commands::shot_info,
@@ -965,6 +1089,64 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::sync::atomic::AtomicU8;
+
+    /// Auto-scrolls a simulated page whose scroll moves `px_per_unit` rows per
+    /// unit, `sign` = -1 when the platform's "down" is negative; returns the
+    /// stitched image and whether the end was found.
+    fn auto(
+        page: &RgbaImage,
+        h: u32,
+        px_per_unit: f64,
+        sign: i32,
+        start: i32,
+    ) -> (RgbaImage, bool) {
+        let max = (page.height() - h) as f64;
+        let y = Cell::new(0.0f64);
+        let view = || stitch::tests::view(page, y.get() as u32, h, 0, 0);
+        let mut stitcher = stitch::Stitcher::new(&view());
+        let stop = AtomicU8::new(0);
+        let done = auto_scroll(
+            &mut stitcher,
+            &stop,
+            start,
+            |units| y.set((y.get() + (sign * units) as f64 * px_per_unit).clamp(0.0, max)),
+            || Some(view()),
+            |_, _| {},
+        );
+        (stitcher.finish(), done)
+    }
+
+    #[test]
+    fn auto_scroll_captures_the_whole_page() {
+        let page = stitch::tests::page(64, 2400);
+        // macOS-like: pixels, two image rows per point.
+        let (img, done) = auto(&page, 300, 2.0, 1, 45);
+        assert!(done);
+        assert_eq!(img.as_raw(), page.as_raw());
+        // Windows-like: one notch moves an odd 37 rows.
+        let (img, done) = auto(&page, 300, 37.0, 1, 1);
+        assert!(done);
+        assert_eq!(img.as_raw(), page.as_raw());
+    }
+
+    #[test]
+    fn auto_scroll_finds_the_platforms_down() {
+        let page = stitch::tests::page(64, 1500);
+        let (img, done) = auto(&page, 300, 2.0, -1, 45);
+        assert!(done);
+        assert_eq!(img.as_raw(), page.as_raw());
+    }
+
+    #[test]
+    fn auto_scroll_backs_up_after_a_step_too_far() {
+        let page = stitch::tests::page(64, 2400);
+        // The first step jumps a whole view: lost, then smaller steps.
+        let (img, done) = auto(&page, 300, 2.0, 1, 200);
+        assert!(done);
+        assert_eq!(img.as_raw(), page.as_raw());
+    }
 
     #[test]
     fn capture_arg_reads_the_mode() {

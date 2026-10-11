@@ -270,6 +270,14 @@ pub fn overlay_pass_scroll(app: AppHandle, state: State<AppState>) {
     });
 }
 
+/// Gives the keyboard to the overlay the cursor moved onto.
+#[tauri::command]
+pub fn overlay_focus(window: WebviewWindow) {
+    if window.label().starts_with("overlay-") && !window.is_focused().unwrap_or(true) {
+        let _ = window.set_focus();
+    }
+}
+
 #[tauri::command]
 pub fn overlay_finish(
     app: AppHandle,

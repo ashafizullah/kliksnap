@@ -71,6 +71,50 @@ mod imp {
         fn CGImageGetBitsPerPixel(image: *const c_void) -> usize;
         fn CGImageGetDataProvider(image: *const c_void) -> *const c_void;
         fn CGDataProviderCopyData(provider: *const c_void) -> *const c_void;
+        fn CGPreflightPostEventAccess() -> bool;
+        fn CGRequestPostEventAccess() -> bool;
+        fn CGWarpMouseCursorPosition(point: CGPoint) -> i32;
+        fn CGEventCreateScrollWheelEvent2(
+            source: *const c_void,
+            units: u32,
+            wheel_count: u32,
+            wheel1: i32,
+            wheel2: i32,
+            wheel3: i32,
+        ) -> *mut c_void;
+        fn CGEventPost(tap: u32, event: *const c_void);
+    }
+
+    /// Whether KlikSnap may scroll other apps (Accessibility). When not, asks
+    /// for it: macOS shows its prompt once, then it's up to System Settings.
+    pub fn can_scroll() -> bool {
+        unsafe { CGPreflightPostEventAccess() || CGRequestPostEventAccess() }
+    }
+
+    /// Scrolls what is under `(x, y)` (global points) by `pixels`: positive
+    /// moves the content up, as scrolling down a page does. The cursor moves
+    /// there, since the window under it gets the wheel.
+    pub fn scroll_at((x, y): (f64, f64), pixels: i32) {
+        const PIXEL_UNITS: u32 = 0;
+        const HID_EVENT_TAP: u32 = 0;
+        // Wheel-sized steps, as a trackpad sends: some apps cap a single event.
+        const CHUNK: i32 = 40;
+        unsafe { CGWarpMouseCursorPosition(CGPoint { x, y }) };
+        let mut left = pixels;
+        while left != 0 {
+            let step = left.clamp(-CHUNK, CHUNK);
+            left -= step;
+            unsafe {
+                let event =
+                    CGEventCreateScrollWheelEvent2(std::ptr::null(), PIXEL_UNITS, 1, -step, 0, 0);
+                if event.is_null() {
+                    return;
+                }
+                CGEventPost(HID_EVENT_TAP, event);
+                CFRelease(event);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(6));
+        }
     }
 
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -369,9 +413,28 @@ mod imp {
         y: i32,
     }
 
+    #[repr(C)]
+    struct MouseInput {
+        dx: i32,
+        dy: i32,
+        mouse_data: i32,
+        flags: u32,
+        time: u32,
+        extra: usize,
+    }
+
+    /// INPUT with its MOUSEINPUT arm, the largest in the union.
+    #[repr(C)]
+    struct Input {
+        kind: u32,
+        mouse: MouseInput,
+    }
+
     #[link(name = "user32")]
     extern "system" {
         fn GetCursorPos(point: *mut Point) -> i32;
+        fn SetCursorPos(x: i32, y: i32) -> i32;
+        fn SendInput(count: u32, inputs: *const Input, size: i32) -> u32;
         fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, affinity: u32) -> i32;
     }
 
@@ -383,6 +446,36 @@ mod imp {
             unsafe { SetWindowDisplayAffinity(hwnd.0, WDA_EXCLUDEFROMCAPTURE) };
         }
         0
+    }
+
+    /// Windows lets any app send wheel input to another.
+    pub fn can_scroll() -> bool {
+        true
+    }
+
+    /// Scrolls what is under `(x, y)` (physical pixels) by `notches` of the
+    /// wheel: positive scrolls down. The cursor moves there, since the window
+    /// under it gets the wheel.
+    pub fn scroll_at((x, y): (f64, f64), notches: i32) {
+        const INPUT_MOUSE: u32 = 0;
+        const MOUSEEVENTF_WHEEL: u32 = 0x0800;
+        const WHEEL_DELTA: i32 = 120;
+        unsafe { SetCursorPos(x.round() as i32, y.round() as i32) };
+        for _ in 0..notches.unsigned_abs() {
+            let input = Input {
+                kind: INPUT_MOUSE,
+                mouse: MouseInput {
+                    dx: 0,
+                    dy: 0,
+                    mouse_data: -WHEEL_DELTA * notches.signum(),
+                    flags: MOUSEEVENTF_WHEEL,
+                    time: 0,
+                    extra: 0,
+                },
+            };
+            unsafe { SendInput(1, &input, std::mem::size_of::<Input>() as i32) };
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// Cursor position in physical pixels (xcap's Windows coordinate space).
@@ -516,6 +609,11 @@ mod imp {
     pub fn cursor_pos() -> (i32, i32) {
         (0, 0)
     }
+    /// No portable way to scroll another app (Wayland has none): by hand.
+    pub fn can_scroll() -> bool {
+        false
+    }
+    pub fn scroll_at(_at: (f64, f64), _units: i32) {}
     pub fn prepare_live_overlay(_win: &WebviewWindow) -> u32 {
         0
     }

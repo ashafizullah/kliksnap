@@ -3,6 +3,19 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.12.0
+
+### New
+
+- Scrolling capture scrolls by itself: select an area and it scrolls to the bottom of the page and stops there. On macOS it needs Accessibility permission (System Settings → Privacy & Security → Accessibility); without it, scroll by hand as before
+- Color picker: press C while selecting, the cursor becomes an eyedropper, click to copy the color. C or Esc goes back
+
+### Improved
+
+- Scrolling capture copes with see-through headers, floating buttons and small animations, and no longer stops short of the bottom
+- Click the preview to open it in the editor
+- Space switches to window mode more reliably, also across several displays
+
 ## 0.11.0
 
 ### New

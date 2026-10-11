@@ -39,6 +39,12 @@
     await invoke("save_shot", { id });
   });
   const edit = () => invoke("edit_shot", { id });
+
+  /** A click on the screenshot itself, between the buttons, opens the editor. */
+  function onBackdropClick(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    if (!target.closest("button")) edit();
+  }
   const pin = () => invoke("pin_shot", { id }).catch((e) => flash(String(e)));
   const explain = () => invoke("explain_shot", { id }).catch((e) => flash(String(e)));
 
@@ -75,7 +81,9 @@
 >
   <img src={imageUrl(`shot-${id}`)} alt={tr("Screenshot")} draggable="false" onload={onLoad} onerror={closeWindow} />
 
-  <div class="actions">
+  <!-- The buttons stay the keyboard path; this is a shortcut for the mouse. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="actions" onclick={onBackdropClick}>
     <button class="close" title={tr("Close")} aria-label={tr("Close")} onclick={closeWindow}>
       <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
     </button>
@@ -129,6 +137,7 @@
     background: rgba(0, 0, 0, 0.55);
     opacity: 0;
     transition: opacity 0.12s;
+    cursor: pointer;
   }
   .card:hover .actions,
   .card.hover .actions {
