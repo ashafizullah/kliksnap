@@ -323,7 +323,7 @@ pub fn show_countdown(
     Ok(win)
 }
 
-const SCROLL_W: f64 = 340.0;
+const SCROLL_W: f64 = 400.0;
 const SCROLL_H: f64 = 48.0;
 
 /// Shows the scrolling capture's controls next to `rect` (fractions of the

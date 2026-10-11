@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { emit, listen } from "@tauri-apps/api/event";
   import { imageUrl, invoke, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
@@ -24,8 +25,11 @@
   let img = $state<HTMLImageElement>()!;
   let loupe = $state<HTMLCanvasElement>();
   let loaded = $state(false);
-  // The color under the crosshair; `C` copies it.
+  // The color under the cursor. `C` turns the cursor into an eyedropper;
+  // a click then copies the color.
   let hex = $state<string | null>(null);
+  let picking = $state(false);
+  const canPick = $derived(mode === "area" && !recording && !scrolling);
   // Live selection shows the screen itself through the window; null until known.
   let live = $state<boolean | null>(null);
   let done = false;
@@ -72,11 +76,35 @@
   async function setMode(next: Mode) {
     mode = next;
     dragStart = null;
+    picking = false;
     if (next === "window" && !windows) windows = await invoke<number[][]>("overlay_windows", { index });
+  }
+
+  /** Space switches every monitor's overlay, not just the one with the keyboard. */
+  function toggleMode() {
+    const next = mode === "area" ? "window" : "area";
+    setMode(next);
+    emit("overlay:mode", { from: index, mode: next });
+  }
+
+  // The keyboard goes to one overlay: the one the cursor was on when they
+  // opened. Moving to another monitor takes it along, for C and Esc too.
+  let focusAsked = 0;
+  function onPointerEnter() {
+    if (document.hasFocus() || performance.now() - focusAsked < 300) return;
+    focusAsked = performance.now();
+    invoke("overlay_focus");
+  }
+
+  function pickColor() {
+    if (!hex || done) return;
+    done = true;
+    invoke("overlay_pick_color", { index, hex });
   }
 
   function onPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
+    if (picking) return pickColor();
     if (mode === "window") {
       // Clicking empty desktop captures the whole screen.
       finish(hovered ?? { x: 0, y: 0, w: viewport.w, h: viewport.h });
@@ -102,6 +130,8 @@
     if (performance.now() - lastMove < 150) return;
     // Off this monitor: hide the guides here, they show on the cursor's monitor.
     mouse = p ? { x: p[0] * viewport.w, y: p[1] * viewport.h } : { x: -1, y: -1 };
+    // On it, without pointer events yet: take the keyboard here as well.
+    if (p) onPointerEnter();
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -117,14 +147,17 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
-    if (e.key === "Escape") finish(null);
-    else if (e.key.toLowerCase() === "c" && mode === "area" && !recording && !scrolling && hex && !dragStart && !done) {
-      done = true;
-      invoke("overlay_pick_color", { index, hex });
+    // Esc leaves the eyedropper first, then cancels.
+    if (e.key === "Escape") {
+      if (picking) picking = false;
+      else finish(null);
+    } else if (e.key.toLowerCase() === "c" && canPick && !dragStart && !done && !e.repeat) {
+      picking = !picking;
     }
     else if (e.key === " " && mode !== "text") {
       e.preventDefault();
-      setMode(mode === "area" ? "window" : "area");
+      // Held down, the key repeats, which would flip the mode back and forth.
+      if (!e.repeat) toggleMode();
     }
   }
 
@@ -194,8 +227,14 @@
 
   onMount(() => {
     const timer = setInterval(followCursor, 30);
+    const unlisten = listen<{ from: number; mode: Mode }>("overlay:mode", (e) => {
+      if (e.payload.from !== index && mode !== "text") setMode(e.payload.mode);
+    });
     init();
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      unlisten.then((off) => off());
+    };
   });
 
   async function init() {
@@ -232,10 +271,12 @@
 <div
   class="stage"
   class:window-mode={mode === "window"}
+  class:picking
   class:live
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
+  onpointerenter={onPointerEnter}
   onwheel={onWheel}
 >
   {#if live === false}
@@ -251,7 +292,7 @@
   {/if}
 
   {#if selecting && mouse.x >= 0}
-    {#if !selection}
+    {#if !selection && !picking}
       <div class="guide h" style="top:{mouse.y}px"></div>
       <div class="guide v" style="left:{mouse.x}px"></div>
     {/if}
@@ -265,14 +306,16 @@
   {/if}
 
   <div class="hint">
-    {#if mode === "text"}
+    {#if picking}
+      <strong>{tr("Color picker")}</strong> · {tr("Click to copy the color")} · <kbd>C</kbd> {tr("back to selecting")}
+    {:else if mode === "text"}
       {tr("Drag over text to copy it")} · <kbd>Shift</kbd> {tr("text only, skip QR codes")}
     {:else}
       {#if recording}<strong>{tr("Record")}</strong> ·{/if}
       {#if scrolling}<strong>{tr("Scrolling capture")}</strong> · {tr("Select the part that scrolls")} ·{/if}
       {mode === "area" ? tr("Drag to select") : tr("Click a window")} · <kbd>Space</kbd>
       {mode === "area" ? tr("window mode") : tr("area mode")}
-      {#if mode === "area" && !recording && !scrolling}· <kbd>C</kbd> {tr("copy color")}{/if}
+      {#if canPick}· <kbd>C</kbd> {tr("copy color")}{/if}
     {/if}
     {#if live}· {tr("Scroll works")}{/if}
     · <kbd>Esc</kbd> {tr("cancel")}
@@ -292,6 +335,14 @@
   }
   .stage.window-mode {
     cursor: default;
+  }
+  /* An eyedropper, its tip on the pixel: white under a dark outline, so it
+     shows on light and dark screens alike. */
+  .stage.picking {
+    cursor:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M19.6 4.4a2.6 2.6 0 0 0-3.7 0l-2.4 2.4-1-1-1.5 1.5 1 1-7.3 7.3-.9 3.6-1.3 1.3 1.5 1.5 1.3-1.3 3.6-.9 7.3-7.3 1 1 1.5-1.5-1-1 2.4-2.4a2.6 2.6 0 0 0 0-3.7z' fill='white' stroke='%23111' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E")
+        2 22,
+      crosshair;
   }
   /* Fully transparent pixels let clicks through to the apps below. */
   .stage.live {

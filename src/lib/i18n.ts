@@ -36,6 +36,9 @@ const ID: Record<string, string> = {
   Off: "Mati",
   Copied: "Disalin",
   Annotate: "Anotasi",
+  "Color picker": "Pengambil warna",
+  "Click to copy the color": "Klik untuk menyalin warna",
+  "back to selecting": "kembali memilih area",
   "Keep on screen": "Tetap di layar",
   "Save & Copy": "Simpan & Salin",
 
@@ -71,6 +74,10 @@ const ID: Record<string, string> = {
   "Maximum height reached": "Tinggi maksimum tercapai",
   "Too fast: scroll back up a little": "Terlalu cepat: gulir ke atas sedikit",
   "Scroll down slowly": "Gulir ke bawah pelan-pelan",
+  "Scrolling…": "Menggulir…",
+  "Scroll by hand, or allow Accessibility to auto-scroll": "Gulir manual, atau izinkan Aksesibilitas untuk gulir otomatis",
+  "Allow KlikSnap in System Settings → Privacy & Security → Accessibility, then start the capture again.":
+    "Izinkan KlikSnap di System Settings → Privacy & Security → Accessibility, lalu mulai tangkapan lagi.",
 
   // Pin
   "Pinned screenshot": "Tangkapan layar yang disematkan",

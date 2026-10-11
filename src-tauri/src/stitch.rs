@@ -2,7 +2,9 @@
 //! new frame is matched against the previous one by comparing row hashes:
 //! the shift that lines the rows up tells how far the content moved, and
 //! the rows that came into view are appended. Rows that never move (a
-//! sticky header or footer) are kept once.
+//! sticky header or footer) are kept once. New rows are taken from above
+//! the bottom of the frame, where floating buttons and banners sit, so they
+//! appear once, at the end, rather than in every step.
 
 use std::hash::{Hash, Hasher};
 
@@ -15,7 +17,8 @@ pub const MAX_HEIGHT: usize = 30_000;
 pub enum Step {
     /// The content moved and this many rows were added.
     Added(usize),
-    /// Nothing moved.
+    /// Nothing moved: the end of the content, or not scrolled yet. Something
+    /// small may have changed in place, like an animation.
     Same,
     /// No match: scrolled too far between frames, or upwards.
     Lost,
@@ -26,7 +29,7 @@ pub enum Step {
 pub struct Stitcher {
     w: usize,
     h: usize,
-    /// The image so far, without the footer.
+    /// The image so far, without the frame's bottom zone (see `keep`).
     out: Vec<u8>,
     prev: Vec<u8>,
     prev_rows: Vec<Row>,
@@ -54,9 +57,23 @@ impl Stitcher {
         }
     }
 
+    /// The height of the captured region.
+    pub fn region_height(&self) -> usize {
+        self.h
+    }
+
     /// The height of the result so far.
     pub fn height(&self) -> usize {
-        self.out.len() / (self.w * 4) + self.bands.map_or(0, |(_, bottom)| bottom)
+        self.out.len() / (self.w * 4) + self.bands.map_or(0, |_| self.keep())
+    }
+
+    /// Rows at the bottom of each frame that new content is not taken from:
+    /// the sticky footer, or a floating "back to top" button, chat bubble or
+    /// cookie banner that a footer check can't see because it comes and goes
+    /// or shows the page through it. The last frame's go at the very end.
+    fn keep(&self) -> usize {
+        let bottom = self.bands.map_or(0, |(_, bottom)| bottom);
+        bottom.max(self.h * 15 / 100)
     }
 
     pub fn push(&mut self, frame: &RgbaImage) -> Step {
@@ -71,17 +88,26 @@ impl Stitcher {
             return Step::Same;
         }
         let (top, bottom) = self.bands.unwrap_or_else(|| bands(&self.prev_rows, &cur));
-        let Some(dy) = shift(&self.prev_rows, &cur, top, self.h - bottom) else {
+        // Failing that, leave out the bottom zone, where things float over
+        // the page (see `keep`): it allows shorter jumps only.
+        let keep = bottom.max(self.h * 15 / 100);
+        let Some(dy) = shift(&self.prev_rows, &cur, top, self.h - bottom)
+            .or_else(|| shift(&self.prev_rows, &cur, top, self.h - keep))
+        else {
             return Step::Lost;
         };
+        if dy == 0 {
+            return Step::Same;
+        }
         let row = self.w * 4;
         if self.bands.is_none() {
-            // The first frame's footer ends `out`; the last frame's goes
+            // The first frame's bottom zone ends `out`; the last frame's goes
             // under everything when done.
             self.bands = Some((top, bottom));
-            self.out.truncate(self.out.len() - bottom * row);
+            self.out.truncate(self.out.len() - self.keep() * row);
         }
-        let end = self.h - bottom;
+        let end = self.h - self.keep();
+        let dy = dy.min(end);
         let added = dy.min(MAX_HEIGHT.saturating_sub(self.height()));
         self.out
             .extend_from_slice(&frame.as_raw()[(end - dy) * row..(end - dy + added) * row]);
@@ -91,10 +117,10 @@ impl Stitcher {
     }
 
     pub fn finish(mut self) -> RgbaImage {
-        let bottom = self.bands.map_or(0, |(_, bottom)| bottom);
+        let keep = self.bands.map_or(0, |_| self.keep());
         let row = self.w * 4;
         self.out
-            .extend_from_slice(&self.prev[(self.h - bottom) * row..]);
+            .extend_from_slice(&self.prev[(self.h - keep) * row..]);
         let h = self.out.len() / (self.w * 4);
         RgbaImage::from_raw(self.w as u32, h as u32, self.out).expect("whole rows")
     }
@@ -131,12 +157,17 @@ fn bands(prev: &[Row], cur: &[Row]) -> (usize, usize) {
     }
 }
 
-/// How far the rows in `start..end` moved up from `prev` to `cur`.
+/// How far the rows in `start..end` moved up from `prev` to `cur`. The best
+/// shift needn't match every row: a see-through sticky header changes with
+/// the page behind it, and animations play as content comes into view. It
+/// must match most of them and clearly beat every other shift.
 fn shift(prev: &[Row], cur: &[Row], start: usize, end: usize) -> Option<usize> {
     let n = end.saturating_sub(start);
     let min_overlap = (n / 5).max(8);
-    let mut best: Option<(f64, usize)> = None;
-    for dy in 1..n.saturating_sub(min_overlap) {
+    let mut scores = Vec::new();
+    // From 0: a frame that didn't move but changed a little in place (an
+    // animation, a caret) must read as still, not as lost.
+    for dy in 0..n.saturating_sub(min_overlap) {
         let (mut matched, mut counted) = (0usize, 0usize);
         for i in start..end - dy {
             let (c, p) = (cur[i], prev[i + dy]);
@@ -149,22 +180,33 @@ fn shift(prev: &[Row], cur: &[Row], start: usize, end: usize) -> Option<usize> {
         if counted < 4 {
             continue;
         }
-        let score = matched as f64 / counted as f64;
-        // Smallest shift wins ties: between frames taken moments apart,
-        // a short scroll is the likelier one.
-        if score >= 0.9 && best.is_none_or(|(s, _)| score > s + 0.01) {
-            best = Some((score, dy));
-        }
+        scores.push((matched as f64 / counted as f64, dy));
     }
-    best.map(|(_, dy)| dy)
+    // Smallest shift wins ties: between frames taken moments apart, a short
+    // scroll is the likelier one.
+    let (score, dy) =
+        scores
+            .iter()
+            .copied()
+            .fold(None, |best: Option<(f64, usize)>, (s, dy)| match best {
+                Some((b, _)) if s <= b + 0.01 => best,
+                _ => Some((s, dy)),
+            })?;
+    // The runner-up away from the best, whose neighbors share its rows.
+    let runner_up = scores
+        .iter()
+        .filter(|(_, d)| d.abs_diff(dy) > 2)
+        .map(|(s, _)| *s)
+        .fold(0.0, f64::max);
+    (score >= 0.9 || (score >= 0.5 && runner_up < score - 0.3)).then_some(dy)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A tall page of distinct rows, some of them blank like real pages.
-    fn page(w: u32, h: u32) -> RgbaImage {
+    pub(crate) fn page(w: u32, h: u32) -> RgbaImage {
         let mut seed = 7u32;
         let mut img = RgbaImage::new(w, h);
         for y in 0..h {
@@ -179,7 +221,7 @@ mod tests {
     }
 
     /// The window `h` rows tall at `y`, with a fixed header and footer drawn over it.
-    fn view(page: &RgbaImage, y: u32, h: u32, header: u32, footer: u32) -> RgbaImage {
+    pub(crate) fn view(page: &RgbaImage, y: u32, h: u32, header: u32, footer: u32) -> RgbaImage {
         let mut v = xcap::image::imageops::crop_imm(page, 0, y, page.width(), h).to_image();
         for yy in (0..header).chain(h - footer..h) {
             for x in 0..page.width() {
@@ -187,6 +229,73 @@ mod tests {
             }
         }
         v
+    }
+
+    /// A view under a see-through header that tints the page behind it, with
+    /// a "back to top" button floating at the bottom once scrolled.
+    fn modern_view(page: &RgbaImage, y: u32, h: u32) -> RgbaImage {
+        let mut v = view(page, y, h, 0, 0);
+        for yy in 0..h / 10 {
+            for x in 0..page.width() {
+                let p = v.get_pixel(x, yy).0;
+                v.put_pixel(
+                    x,
+                    yy,
+                    [p[0] / 4 + 190, p[1] / 4 + 190, p[2] / 4 + 190, 255].into(),
+                );
+            }
+        }
+        if y > 0 {
+            for yy in h - h / 8..h - h / 20 {
+                for x in page.width() / 2..page.width() * 3 / 4 {
+                    v.put_pixel(x, yy, [200, 60, 60, 255].into());
+                }
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn copes_with_a_see_through_header_and_a_floating_button() {
+        let p = page(80, 1600);
+        let h = 300;
+        let mut s = Stitcher::new(&modern_view(&p, 0, h));
+        let mut y = 0;
+        while y + h < p.height() {
+            y = (y + 140).min(p.height() - h);
+            assert!(
+                matches!(s.push(&modern_view(&p, y, h)), Step::Added(_)),
+                "lost at {y}"
+            );
+        }
+        let out = s.finish();
+        assert_eq!(out.height(), p.height());
+        // Below the header and above the last frame's bottom zone, it's the
+        // page itself: the button shows once, at the very end.
+        let row = p.width() as usize * 4;
+        let (from, to) = (h as usize / 10, p.height() as usize - h as usize * 15 / 100);
+        assert_eq!(
+            out.as_raw()[from * row..to * row],
+            p.as_raw()[from * row..to * row]
+        );
+    }
+
+    #[test]
+    fn an_animation_in_place_reads_as_still() {
+        let p = page(80, 900);
+        let mut s = Stitcher::new(&view(&p, 0, 300, 0, 0));
+        assert!(matches!(
+            s.push(&view(&p, 120, 300, 0, 0)),
+            Step::Added(120)
+        ));
+        // At the end of the page, something blinks: still, not lost.
+        let mut blink = view(&p, 120, 300, 0, 0);
+        for y in 140..160 {
+            for x in 10..30 {
+                blink.put_pixel(x, y, [255, 0, 0, 255].into());
+            }
+        }
+        assert_eq!(s.push(&blink), Step::Same);
     }
 
     #[test]

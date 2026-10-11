@@ -4,19 +4,26 @@
   import { invoke, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
-  type Progress = { height: number; lost: boolean; full: boolean };
+  type Progress = { height: number; lost: boolean; full: boolean; auto: boolean; needs_permission: boolean };
 
-  let progress = $state<Progress>({ height: 0, lost: false, full: false });
+  let progress = $state<Progress>({ height: 0, lost: false, full: false, auto: false, needs_permission: false });
+  const size = $derived(`${progress.height.toLocaleString()} px`);
   let ending = $state(false);
 
+  // KlikSnap scrolls by itself when it may, and stops at the end; by hand
+  // otherwise (no permission on macOS, Linux, or when it lost its place).
   const message = $derived(
     progress.full
       ? tr("Maximum height reached")
-      : progress.lost
-        ? tr("Too fast: scroll back up a little")
-        : progress.height
-          ? `${progress.height.toLocaleString()} px`
-          : tr("Scroll down slowly"),
+      : progress.auto
+        ? `${tr("Scrolling…")} ${size}`
+        : progress.lost
+          ? tr("Too fast: scroll back up a little")
+          : progress.needs_permission
+            ? tr("Scroll by hand, or allow Accessibility to auto-scroll")
+            : progress.height
+              ? size
+              : tr("Scroll down slowly"),
   );
 
   function end(done: boolean) {
@@ -33,7 +40,13 @@
 
 <div class="bar">
   <span class="dot" class:warn={progress.lost || progress.full} aria-hidden="true"></span>
-  <span class="message" role="status">{message}</span>
+  <span
+    class="message"
+    role="status"
+    title={progress.needs_permission
+      ? tr("Allow KlikSnap in System Settings → Privacy & Security → Accessibility, then start the capture again.")
+      : undefined}>{message}</span
+  >
   <button class="cancel" onclick={() => end(false)} disabled={ending}>{tr("Cancel")}</button>
   <button class="done" onclick={() => end(true)} disabled={ending}>{tr("Done")}</button>
 </div>

@@ -29,7 +29,7 @@
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
 - **Floating preview** after each capture: copy, save, pin, or open the editor
 - **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
-- **Scrolling capture**: select an area, scroll it, and get one tall stitched image (sticky headers kept once)
+- **Scrolling capture**: select an area and KlikSnap scrolls it to the end by itself, then stitches one tall image (sticky headers kept once). On macOS auto-scroll needs Accessibility permission; without it, and on Linux, you scroll by hand
 - **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder, with the computer's sound and the microphone if you want them
 - **Record GIF**: an area straight to an animated GIF
 - **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
@@ -37,7 +37,7 @@
 - **Annotate**: arrow, line, rectangle, ellipse, pen, text, numbered steps, highlighter, blur, pixelate, crop, undo/redo
 - **Auto-redact**: one click hides email addresses, phone and card numbers, IP addresses, API keys and passwords that OCR finds
 - **Background**: place a screenshot on a gradient or solid backdrop with padding, rounded corners and a shadow
-- **Color picker**: press `C` while selecting to copy the color under the crosshair as hex
+- **Color picker**: press `C` while selecting to turn the cursor into an eyedropper, then click to copy the color as hex
 - **Copy text (OCR)** from anything on screen, using the OCR engine built into the OS (Apple Vision / Windows.Media.Ocr; Tesseract on Linux). If the selection holds a QR code, its content is copied instead
 - Copies to the clipboard automatically; optional auto-save to a folder as PNG or JPG, with a file name template
 - **Ask AI** about a screenshot with your own OpenAI-compatible model (OpenAI, OpenRouter, Groq, Ollama…): explain it, translate it, summarize it, turn a table into CSV, ask follow-ups, or add your own actions. Copy Text can read with AI too
@@ -90,7 +90,7 @@ On Windows you can also hide the tray icon in Settings; KlikSnap keeps running o
 
 On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` instead of the Snipping Tool.
 
-In area mode, press `Space` to switch to window mode, `C` to copy the color under the crosshair and `Esc` to cancel. In the editor, use `A L R O D T N H B P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
+In area mode, press `Space` to switch to window mode, `C` for the color picker (click to copy a color) and `Esc` to cancel. In the editor, use `A L R O D T N H B P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
 
 A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%); hold `⌥` / `Alt` while scrolling to fade it. Right-click it for Copy, Save, Annotate, Opacity and Click Through; double-click or press `Esc` to close it. A click-through pin ignores the mouse until you choose *Make Pins Clickable Again* in the menu bar / tray menu.
 
