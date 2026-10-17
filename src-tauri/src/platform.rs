@@ -59,6 +59,7 @@ mod imp {
         fn CGEventCreate(source: *const c_void) -> *mut c_void;
         fn CGEventGetLocation(event: *const c_void) -> CGPoint;
         fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+        fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
         fn CGWindowListCreateImage(
             rect: CGRect,
             option: u32,
@@ -126,6 +127,10 @@ mod imp {
 
     /// Readies a live-selection overlay for `capture_below`; returns its window number.
     pub fn prepare_live_overlay(win: &WebviewWindow) -> u32 {
+        window_number(win)
+    }
+
+    pub fn window_number(win: &WebviewWindow) -> u32 {
         let Ok(ptr) = win.ns_window() else { return 0 };
         let number: isize = unsafe { msg_send![&*(ptr as *const AnyObject), windowNumber] };
         number as u32
@@ -182,6 +187,15 @@ mod imp {
             let p = CGEventGetLocation(event);
             CFRelease(event);
             (p.x as i32, p.y as i32)
+        }
+    }
+
+    /// Whether the left or right mouse button is held down.
+    pub fn mouse_down() -> bool {
+        const COMBINED_SESSION_STATE: i32 = 0;
+        unsafe {
+            CGEventSourceButtonState(COMBINED_SESSION_STATE, 0)
+                || CGEventSourceButtonState(COMBINED_SESSION_STATE, 1)
         }
     }
 
@@ -436,6 +450,7 @@ mod imp {
         fn SetCursorPos(x: i32, y: i32) -> i32;
         fn SendInput(count: u32, inputs: *const Input, size: i32) -> u32;
         fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, affinity: u32) -> i32;
+        fn GetAsyncKeyState(key: i32) -> i16;
     }
 
     /// Keeps a live-selection overlay out of screen captures (Windows 10
@@ -483,6 +498,18 @@ mod imp {
         let mut p = Point { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut p) };
         (p.x, p.y)
+    }
+
+    /// Whether the left or right mouse button is held down.
+    pub fn mouse_down() -> bool {
+        const VK_LBUTTON: i32 = 1;
+        const VK_RBUTTON: i32 = 2;
+        unsafe { GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0 }
+    }
+
+    /// Windows records every window; there is no number to name one by.
+    pub fn window_number(_win: &WebviewWindow) -> u32 {
+        0
     }
 
     pub fn has_screen_permission() -> bool {
@@ -616,6 +643,12 @@ mod imp {
     pub fn scroll_at(_at: (f64, f64), _units: i32) {}
     pub fn prepare_live_overlay(_win: &WebviewWindow) -> u32 {
         0
+    }
+    pub fn window_number(_win: &WebviewWindow) -> u32 {
+        0
+    }
+    pub fn mouse_down() -> bool {
+        false
     }
     pub fn has_screen_permission() -> bool {
         true

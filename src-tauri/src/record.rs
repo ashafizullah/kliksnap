@@ -37,7 +37,9 @@ pub enum SoundWarning {
 
 /// Starts recording `rect` (fractions of monitor `b`) into an MP4 at `path`,
 /// or a GIF if the path ends in `.gif`, at `percent` of the screen's
-/// resolution. Sound that can't be captured is left out rather than failing
+/// resolution, with the mouse pointer drawn in if `cursor`. KlikSnap's own
+/// windows are left out, except `keep` (a macOS window number; Windows and
+/// Linux record every window anyway). Sound that can't be captured is left out rather than failing
 /// the recording; the warning says so.
 pub fn start(
     b: &Bounds,
@@ -45,6 +47,8 @@ pub fn start(
     percent: u32,
     path: &Path,
     audio: Audio,
+    cursor: bool,
+    keep: Option<u32>,
 ) -> Result<(Recorder, Option<SoundWarning>), String> {
     let mut r = region(b, rect, percent);
     let audio = if is_gif(path) {
@@ -61,19 +65,19 @@ pub fn start(
         audio.mic = false;
         warning = Some(SoundWarning::MicDenied);
     }
-    match imp::Recorder::start(b, r, path, audio) {
+    match imp::Recorder::start(b, r, path, audio, cursor, keep) {
         Ok(rec) => Ok((rec, warning)),
         Err(e) if e != DECLINED && (audio.system || audio.mic) => {
             eprintln!("recording with sound: {e}");
             let _ = std::fs::remove_file(path);
-            let rec = imp::Recorder::start(b, r, path, Audio::default())?;
+            let rec = imp::Recorder::start(b, r, path, Audio::default(), cursor, keep)?;
             Ok((rec, Some(warning.unwrap_or(SoundWarning::NoSound))))
         }
         // macOS also declines the whole stream when only the microphone is
         // refused: try once more without sound before blaming the screen.
         Err(e) if audio.system || audio.mic => {
             let _ = std::fs::remove_file(path);
-            match imp::Recorder::start(b, r, path, Audio::default()) {
+            match imp::Recorder::start(b, r, path, Audio::default(), cursor, keep) {
                 Ok(rec) => {
                     let w = if audio.mic {
                         SoundWarning::MicDenied
@@ -381,6 +385,8 @@ mod imp {
             r: Region,
             path: &Path,
             audio: super::Audio,
+            cursor: bool,
+            keep: Option<u32>,
         ) -> Result<Self, String> {
             let content = shareable_content()?;
             let display = unsafe { content.displays() }
@@ -396,12 +402,16 @@ mod imp {
                 .filter(|a| unsafe { a.processID() } as u32 == std::process::id())
                 .collect();
             let own = NSArray::from_retained_slice(&own);
+            let kept: Vec<_> = unsafe { content.windows() }
+                .iter()
+                .filter(|w| Some(unsafe { w.windowID() }) == keep)
+                .collect();
             let filter = unsafe {
                 SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
                     SCContentFilter::alloc(),
                     &display,
                     &own,
-                    &NSArray::new(),
+                    &NSArray::from_retained_slice(&kept),
                 )
             };
             let config = unsafe { SCStreamConfiguration::new() };
@@ -410,7 +420,7 @@ mod imp {
                 config.setHeight(r.px_h as usize);
                 config.setSourceRect(CGRect::new(CGPoint::new(r.x, r.y), CGSize::new(r.w, r.h)));
                 config.setMinimumFrameInterval(CMTime::new(1, FPS as i32));
-                config.setShowsCursor(true);
+                config.setShowsCursor(cursor);
                 config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
                 config.setQueueDepth(6);
             }
@@ -972,6 +982,8 @@ mod imp {
             r: Region,
             path: &Path,
             audio: super::Audio,
+            cursor: bool,
+            _keep: Option<u32>,
         ) -> Result<Self, String> {
             let with_sound = audio.system || audio.mic;
             let center = POINT {
@@ -982,7 +994,11 @@ mod imp {
             let monitor = Monitor::from_raw_hmonitor(hmonitor.0);
             let settings = Settings::new(
                 monitor,
-                CursorCaptureSettings::WithCursor,
+                if cursor {
+                    CursorCaptureSettings::WithCursor
+                } else {
+                    CursorCaptureSettings::WithoutCursor
+                },
                 DrawBorderSettings::WithoutBorder,
                 SecondaryWindowSettings::Default,
                 MinimumUpdateIntervalSettings::Custom(Duration::from_millis(1000 / FPS as u64)),
@@ -1055,13 +1071,20 @@ mod imp {
     }
 
     impl Recorder {
-        pub fn start(b: &Bounds, r: Region, path: &Path, audio: Audio) -> Result<Self, String> {
+        pub fn start(
+            b: &Bounds,
+            r: Region,
+            path: &Path,
+            audio: Audio,
+            cursor: bool,
+            _keep: Option<u32>,
+        ) -> Result<Self, String> {
             if std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland") {
                 return Err("recording on Wayland isn't supported yet: log in with an X11 (Xorg) session to record".into());
             }
             let display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into());
             let mut cmd = Command::new("ffmpeg");
-            cmd.args(args(b, r, path, audio, &display))
+            cmd.args(args(b, r, path, audio, cursor, &display))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped());
@@ -1110,6 +1133,7 @@ mod imp {
         r: Region,
         path: &Path,
         audio: Audio,
+        cursor: bool,
         display: &str,
     ) -> Vec<String> {
         let mut a: Vec<String> = ["-hide_banner", "-loglevel", "error", "-y"]
@@ -1123,6 +1147,8 @@ mod imp {
             super::FPS.to_string(),
             "-video_size".into(),
             format!("{}x{}", r.w as u32, r.h as u32),
+            "-draw_mouse".into(),
+            u8::from(cursor).to_string(),
             "-i".into(),
             format!("{display}+{x},{y}"),
         ]);
@@ -1195,15 +1221,18 @@ mod imp {
                 system: true,
                 mic: true,
             };
-            let a = args(&b, r, Path::new("/tmp/a.mp4"), audio, ":1").join(" ");
-            assert!(a.contains("-video_size 480x270 -i :1+2880,540"), "{a}");
+            let a = args(&b, r, Path::new("/tmp/a.mp4"), audio, false, ":1").join(" ");
+            assert!(
+                a.contains("-video_size 480x270 -draw_mouse 0 -i :1+2880,540"),
+                "{a}"
+            );
             let graph = format!(
                 "[0:v]scale={}:{}[v];[1:a][2:a]amix=inputs=2[a]",
                 r.px_w, r.px_h
             );
             assert!(a.contains(&graph), "{a}");
             assert!(a.ends_with("/tmp/a.mp4"));
-            let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), ":1").join(" ");
+            let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), true, ":1").join(" ");
             assert!(gif.contains("palettegen") && gif.contains("-an"), "{gif}");
         }
     }
@@ -1262,8 +1291,16 @@ mod tests {
         let path = std::env::temp_dir().join("kliksnap-record-test.mp4");
         for percent in [100, 50] {
             let _ = std::fs::remove_file(&path);
-            let (rec, _) =
-                start(&b, [0.0, 0.0, 0.5, 0.5], percent, &path, Audio::default()).unwrap();
+            let (rec, _) = start(
+                &b,
+                [0.0, 0.0, 0.5, 0.5],
+                percent,
+                &path,
+                Audio::default(),
+                true,
+                None,
+            )
+            .unwrap();
             std::thread::sleep(std::time::Duration::from_secs(2));
             rec.stop().unwrap();
             let len = std::fs::metadata(&path).unwrap().len();
@@ -1282,7 +1319,7 @@ mod tests {
             system: true,
             mic: false,
         };
-        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio).unwrap();
+        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio, true, None).unwrap();
         assert_eq!(warning, None);
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
@@ -1296,7 +1333,16 @@ mod tests {
         let b = crate::capture::bounds_at((10, 10)).unwrap();
         let path = std::env::temp_dir().join("kliksnap-record-test.gif");
         let _ = std::fs::remove_file(&path);
-        let (rec, _) = start(&b, [0.0, 0.0, 0.5, 0.5], 100, &path, Audio::default()).unwrap();
+        let (rec, _) = start(
+            &b,
+            [0.0, 0.0, 0.5, 0.5],
+            100,
+            &path,
+            Audio::default(),
+            true,
+            None,
+        )
+        .unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
         let len = std::fs::metadata(&path).unwrap().len();

@@ -16,6 +16,15 @@ export const isMac = navigator.userAgent.includes("Mac");
 export const isWindows = navigator.userAgent.includes("Windows");
 export const isLinux = !isMac && !isWindows;
 
+const MAC_SYMBOLS: Record<string, string> = { Command: "⌘", Control: "⌃", Alt: "⌥", Shift: "⇧", CommandOrControl: "⌘" };
+
+/** A Tauri accelerator such as "Alt+Shift+4" as the system writes it: ⌥⇧4 on macOS. */
+export function shortcutLabel(accelerator: string) {
+  const parts = accelerator.split("+");
+  if (!isMac) return parts.map((p) => (p === "CommandOrControl" ? "Ctrl" : p)).join(" + ");
+  return parts.map((p) => MAC_SYMBOLS[p] ?? p).join("");
+}
+
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();

@@ -292,6 +292,9 @@ const ID: Record<string, string> = {
   Sound: "Suara",
   "Record computer sound": "Rekam suara komputer",
   "Record microphone": "Rekam mikrofon",
+  "Show mouse pointer": "Tampilkan kursor mouse",
+  "Highlight mouse clicks": "Sorot klik mouse",
+  "Press to stop": "Tekan untuk berhenti",
   "Computer sound needs macOS 13 or later, the microphone macOS 15. Each goes on its own track. GIFs have no sound.":
     "Suara komputer butuh macOS 13 atau lebih baru, mikrofon macOS 15. Masing-masing di track sendiri. GIF tidak bersuara.",
   "Both are mixed into one track. GIFs have no sound.": "Keduanya digabung dalam satu track. GIF tidak bersuara.",
