@@ -1232,7 +1232,7 @@ mod imp {
             );
             assert!(a.contains(&graph), "{a}");
             assert!(a.ends_with("/tmp/a.mp4"));
-            let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), ":1").join(" ");
+            let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), true, ":1").join(" ");
             assert!(gif.contains("palettegen") && gif.contains("-an"), "{gif}");
         }
     }
