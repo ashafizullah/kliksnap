@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { invoke, ready } from "./lib/api";
+  import { invoke, param, ready, shortcutLabel } from "./lib/api";
   import { tr } from "./lib/i18n";
 
   const start = Date.now();
+  // The record shortcut stops the recording too.
+  const key = param("key") ? shortcutLabel(param("key")!) : "";
   let elapsed = $state(0);
   let stopping = $state(false);
 
@@ -24,6 +26,9 @@
 <div class="bar">
   <span class="dot" aria-hidden="true"></span>
   <span class="clock" aria-label={tr("Recording time")}>{clock}</span>
+  {#if key}
+    <kbd title={tr("Press to stop")}>{key}</kbd>
+  {/if}
   <button onclick={stop} disabled={stopping}>
     <span class="square" aria-hidden="true"></span>
     {tr("Stop")}
@@ -31,12 +36,15 @@
 </div>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #1c1c1e;
+    background: transparent;
   }
   .bar {
     position: fixed;
     inset: 0;
+    border-radius: 10px;
+    background: rgba(28, 28, 30, 0.55);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -60,6 +68,11 @@
     font-variant-numeric: tabular-nums;
     font-weight: 600;
   }
+  kbd {
+    font: inherit;
+    font-size: 11px;
+    color: rgba(242, 242, 247, 0.75);
+  }
   button {
     display: flex;
     align-items: center;
@@ -68,7 +81,7 @@
     padding: 0 10px;
     border: 0;
     border-radius: 6px;
-    background: #ff3b30;
+    background: rgba(255, 59, 48, 0.85);
     color: #fff;
     font-weight: 600;
   }

@@ -458,6 +458,9 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
         }
     }
     let settings = state.settings();
+    let clicks = (settings.record_clicks && cfg!(any(target_os = "macos", target_os = "windows")))
+        .then(|| show_clicks(app, &bounds))
+        .flatten();
     let dir = settings.save_dir(app);
     let ext = if gif { "gif" } else { "mp4" };
     let path = output::unique_path(&dir, &settings.recording_name(ext));
@@ -468,16 +471,32 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 system: settings.record_system_audio,
                 mic: settings.record_mic,
             };
-            record::start(&bounds, rect, settings.record_scale, &path, audio)
+            record::start(
+                &bounds,
+                rect,
+                settings.record_scale,
+                &path,
+                audio,
+                settings.record_cursor,
+                clicks.as_ref().map(platform::window_number),
+            )
         });
+    if started.is_err() {
+        if let Some(win) = &clicks {
+            let _ = win.destroy();
+        }
+    }
     match started {
         Ok((recorder, warning)) => {
             *state.recording.lock().unwrap() = Some(Recording {
                 recorder,
-                path,
+                path: path.clone(),
                 bounds,
             });
-            if let Err(e) = ui::show_recording(app, &bounds) {
+            if clicks.is_some() {
+                track_clicks(app.clone(), bounds, path);
+            }
+            if let Err(e) = ui::show_recording(app, &bounds, &settings.hotkey_record) {
                 eprintln!("recording controls: {e}");
             }
             tray::refresh(app);
@@ -719,8 +738,10 @@ pub fn stop_recording(app: &AppHandle) {
     let Some(rec) = app.state::<AppState>().recording.lock().unwrap().take() else {
         return;
     };
-    if let Some(win) = app.get_webview_window("recording") {
-        let _ = win.destroy();
+    for label in ["recording", "clicks"] {
+        if let Some(win) = app.get_webview_window(label) {
+            let _ = win.destroy();
+        }
     }
     tray::refresh(app);
     let app = app.clone();
@@ -745,6 +766,63 @@ pub fn stop_recording(app: &AppHandle) {
             },
         };
         let _ = show_toast(&app, toast, &rec.bounds);
+    });
+}
+
+/// Opens the window that shows clicks in the recording, once it is on
+/// screen, so macOS can be told to record it.
+fn show_clicks(app: &AppHandle, bounds: &Bounds) -> Option<WebviewWindow> {
+    let win = ui::show_clicks(app, bounds)
+        .map_err(|e| eprintln!("clicks: {e}"))
+        .ok()?;
+    let wait = std::time::Instant::now();
+    while !win.is_visible().unwrap_or(false) && wait.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Some(win)
+}
+
+#[derive(Clone, PartialEq, serde::Serialize)]
+struct MouseDown {
+    /// Logical pixels from the monitor's top-left corner.
+    x: f64,
+    y: f64,
+    down: bool,
+}
+
+/// Tells the clicks window where the mouse button is held, for as long as
+/// the recording at `path` lasts.
+fn track_clicks(app: AppHandle, b: Bounds, path: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let n = if cfg!(target_os = "macos") {
+            1.0
+        } else {
+            b.scale
+        };
+        let mut last: Option<MouseDown> = None;
+        let recording = || {
+            let state = app.state::<AppState>();
+            let rec = state.recording.lock().unwrap();
+            rec.as_ref().is_some_and(|r| r.path == path)
+        };
+        while recording() {
+            let (x, y) = platform::cursor_pos();
+            let now = MouseDown {
+                x: (x - b.x) as f64 / n,
+                y: (y - b.y) as f64 / n,
+                down: platform::mouse_down(),
+            };
+            // While up, only the press matters, not where the mouse goes.
+            let changed = match &last {
+                Some(l) => l.down != now.down || (now.down && *l != now),
+                None => now.down,
+            };
+            if changed {
+                let _ = app.emit_to("clicks", "clicks:mouse", now.clone());
+                last = Some(now);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     });
 }
 

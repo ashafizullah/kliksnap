@@ -19,19 +19,21 @@
 </button>
 
 <style>
+  :global(html),
   :global(body) {
-    background: #1c1c1e;
+    background: transparent;
   }
   .countdown {
     position: fixed;
     inset: 0;
+    border-radius: 10px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 2px;
     border: 0;
-    background: transparent;
+    background: rgba(28, 28, 30, 0.85);
     color: #f2f2f7;
     cursor: default;
   }

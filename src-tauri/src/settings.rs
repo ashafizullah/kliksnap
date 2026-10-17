@@ -48,6 +48,10 @@ pub struct Settings {
     pub record_system_audio: bool,
     /// MP4 recordings carry the microphone (macOS 15+).
     pub record_mic: bool,
+    /// Recordings show the mouse pointer.
+    pub record_cursor: bool,
+    /// Recordings show a ripple where the mouse is clicked (not on Linux).
+    pub record_clicks: bool,
     /// How many recent captures History keeps; 0 keeps none.
     pub history_limit: u32,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
@@ -98,6 +102,8 @@ impl Default for Settings {
             record_scale: 100,
             record_system_audio: false,
             record_mic: false,
+            record_cursor: true,
+            record_clicks: false,
             preview_secs: 6,
             history_limit: 50,
             live_selection: true,

@@ -3,6 +3,18 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.13.0
+
+### New
+
+- Highlight mouse clicks in recordings: each click shows a ripple, and a dot follows the mouse while the button is held. Turn it on in Settings → Recording (macOS and Windows)
+- Hide the mouse pointer in recordings: Settings → Recording → Show mouse pointer
+
+### Improved
+
+- The recording controls are see-through and show the record shortcut, which stops the recording too
+- The countdown before a recording has rounded corners
+
 ## 0.12.0
 
 ### New

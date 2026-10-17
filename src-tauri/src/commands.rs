@@ -56,7 +56,7 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
         // of KlikSnap's windows out).
         platform::prepare_live_overlay(&window);
         platform::show_inactive(&window);
-    } else if label.starts_with("preview-") || label == "toast" || label == "countdown" {
+    } else if label.starts_with("preview-") || ["toast", "countdown", "clicks"].contains(&label) {
         platform::show_inactive(&window);
     } else {
         let _ = window.show();

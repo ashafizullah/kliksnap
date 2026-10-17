@@ -303,6 +303,8 @@ pub fn show_countdown(
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .shadow(false)
+        .transparent(true)
         .focused(false)
         .accept_first_mouse(true)
         .visible_on_all_workspaces(true)
@@ -361,31 +363,84 @@ pub fn show_scroll(app: &AppHandle, b: &Bounds, rect: [f64; 4]) -> tauri::Result
     Ok(())
 }
 
+/// Percent-encodes `s` for a URL query (a `+` would read as a space).
+fn encode_component(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 const RECORDING_W: f64 = 168.0;
 const RECORDING_H: f64 = 44.0;
 
-/// Shows the recording's timer and Stop button in the bottom-right corner.
-pub fn show_recording(app: &AppHandle, b: &Bounds) -> tauri::Result<()> {
+/// Shows the recording's timer and Stop button in the bottom-right corner,
+/// with `shortcut` (an accelerator, or empty) as the other way to stop.
+pub fn show_recording(app: &AppHandle, b: &Bounds, shortcut: &str) -> tauri::Result<()> {
     if let Some(old) = app.get_webview_window("recording") {
         old.destroy()?;
     }
     let area = work_area(app, b);
-    let win = WebviewWindowBuilder::new(app, "recording", WebviewUrl::App("recording.html".into()))
+    // Room for the shortcut: ⌥⇧R on macOS, "Alt + Shift + R" elsewhere.
+    let w = match shortcut {
+        "" => RECORDING_W,
+        _ if cfg!(target_os = "macos") => RECORDING_W + 48.0,
+        _ => RECORDING_W + 100.0,
+    };
+    let url = format!("recording.html?key={}", encode_component(shortcut));
+    let win = WebviewWindowBuilder::new(app, "recording", WebviewUrl::App(url.into()))
         .title("KlikSnap")
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .shadow(false)
+        .transparent(true)
         .focused(false)
         .accept_first_mouse(true)
         .visible_on_all_workspaces(true)
-        .inner_size(RECORDING_W, RECORDING_H)
+        .inner_size(w, RECORDING_H)
         .visible(false)
         .build()?;
-    let x = area.x + area.w - area.n(RECORDING_W + MARGIN);
+    let x = area.x + area.w - area.n(w + MARGIN);
     let y = area.y + area.h - area.n(RECORDING_H + MARGIN);
-    place(&win, &area, x, y, RECORDING_W, RECORDING_H);
+    place(&win, &area, x, y, w, RECORDING_H);
     Ok(())
+}
+
+/// Shows a click-through window over the whole monitor that draws the
+/// clicks during a recording, so they are recorded too.
+pub fn show_clicks(app: &AppHandle, b: &Bounds) -> tauri::Result<WebviewWindow> {
+    if let Some(old) = app.get_webview_window("clicks") {
+        old.destroy()?;
+    }
+    let area = Area {
+        x: b.x as f64,
+        y: b.y as f64,
+        w: b.w as f64,
+        h: b.h as f64,
+        scale: b.scale,
+    };
+    let (w, h) = area.logical_size();
+    let win = WebviewWindowBuilder::new(app, "clicks", WebviewUrl::App("clicks.html".into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .focused(false)
+        .focusable(false)
+        .visible_on_all_workspaces(true)
+        .transparent(true)
+        .inner_size(w, h)
+        .visible(false)
+        .build()?;
+    win.set_ignore_cursor_events(true)?;
+    place(&win, &area, area.x, area.y, w, h);
+    Ok(win)
 }
 
 /// Pins a shot to the screen: a borderless window that stays on top, at

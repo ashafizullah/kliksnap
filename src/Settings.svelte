@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { invoke, isLinux, isMac, isWindows, param, ready } from "./lib/api";
+  import { invoke, isLinux, isMac, isWindows, param, ready, shortcutLabel } from "./lib/api";
   import { tr } from "./lib/i18n";
   import { LANGUAGES } from "./lib/languages";
 
@@ -27,6 +27,8 @@
     record_scale: number;
     record_system_audio: boolean;
     record_mic: boolean;
+    record_cursor: boolean;
+    record_clicks: boolean;
     preview_secs: number;
     history_limit: number;
     live_selection: boolean;
@@ -204,13 +206,8 @@
     }
   }
 
-  const MAC_SYMBOLS: Record<string, string> = { Command: "⌘", Control: "⌃", Alt: "⌥", Shift: "⇧", CommandOrControl: "⌘" };
-
   function pretty(accelerator: string) {
-    if (!accelerator) return tr("Not set");
-    const parts = accelerator.split("+");
-    if (!isMac) return parts.map((p) => (p === "CommandOrControl" ? "Ctrl" : p)).join(" + ");
-    return parts.map((p) => MAC_SYMBOLS[p] ?? p).join("");
+    return accelerator ? shortcutLabel(accelerator) : tr("Not set");
   }
 
   /** Converts a key event into a Tauri accelerator such as "Alt+Shift+4". */
@@ -503,6 +500,16 @@
               ? `${tr("Smaller videos, less detail.")}${isMac ? " " + tr("On a Retina display, Low records at the size things appear on screen.") : ""}`
               : tr("Full detail; the largest files.")}
           </p>
+          <label class="row">
+            <span>{tr("Show mouse pointer")}</span>
+            <input type="checkbox" bind:checked={s.record_cursor} onchange={save} />
+          </label>
+          {#if !isLinux}
+            <label class="row">
+              <span>{tr("Highlight mouse clicks")}</span>
+              <input type="checkbox" bind:checked={s.record_clicks} onchange={save} />
+            </label>
+          {/if}
           {#if isLinux}
             <p class="hint">{tr("Recording needs ffmpeg and an X11 session; it doesn't work on Wayland yet.")}</p>
           {/if}
