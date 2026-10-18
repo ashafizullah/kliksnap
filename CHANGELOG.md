@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.1
+
+### Fixed
+
+- Screenshots of an open menu (a tray, menu bar or right-click menu) keep the menu in the picture instead of closing it
+
 ## 0.14.0
 
 ### New

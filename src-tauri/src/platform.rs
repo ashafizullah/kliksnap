@@ -84,6 +84,7 @@ mod imp {
             wheel3: i32,
         ) -> *mut c_void;
         fn CGEventPost(tap: u32, event: *const c_void);
+        fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> *const c_void;
     }
 
     /// Whether KlikSnap may scroll other apps (Accessibility). When not, asks
@@ -201,6 +202,34 @@ mod imp {
 
     pub fn has_screen_permission() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
+    }
+
+    /// Whether a menu is open on screen: a menu bar, tray or context menu of
+    /// any app. It closes as soon as the overlay takes focus.
+    pub fn menu_open() -> bool {
+        const ON_SCREEN_ONLY: u32 = 1 << 0;
+        const EXCLUDE_DESKTOP: u32 = 1 << 4;
+        const POP_UP_MENU_LEVEL: i32 = 101;
+        unsafe {
+            let list = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP, 0);
+            if list.is_null() {
+                return false;
+            }
+            // CFArray and CFDictionary are toll-free bridged to NSArray and NSDictionary.
+            let list = &*(list as *const AnyObject);
+            let key = objc2_foundation::NSString::from_str("kCGWindowLayer");
+            let count: usize = msg_send![list, count];
+            let open = (0..count).any(|i| {
+                let info: *mut AnyObject = msg_send![list, objectAtIndex: i];
+                let layer: *mut AnyObject = msg_send![info, objectForKey: &*key];
+                !layer.is_null() && {
+                    let layer: i32 = msg_send![layer, intValue];
+                    layer == POP_UP_MENU_LEVEL
+                }
+            });
+            CFRelease(list as *const AnyObject as *const c_void);
+            open
+        }
     }
 
     /// Seconds since the last scroll-wheel or trackpad scroll event, momentum included.
@@ -451,6 +480,8 @@ mod imp {
         fn SendInput(count: u32, inputs: *const Input, size: i32) -> u32;
         fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, affinity: u32) -> i32;
         fn GetAsyncKeyState(key: i32) -> i16;
+        fn FindWindowW(class: *const u16, title: *const u16) -> *mut std::ffi::c_void;
+        fn IsWindowVisible(hwnd: *mut std::ffi::c_void) -> i32;
     }
 
     /// Keeps a live-selection overlay out of screen captures (Windows 10
@@ -514,6 +545,16 @@ mod imp {
 
     pub fn has_screen_permission() -> bool {
         true
+    }
+    /// Whether a menu is open on screen: a tray or context menu of any app.
+    /// It closes as soon as the overlay takes focus.
+    pub fn menu_open() -> bool {
+        // Every popup menu is a window of the system class "#32768".
+        let class: Vec<u16> = "#32768\0".encode_utf16().collect();
+        unsafe {
+            let hwnd = FindWindowW(class.as_ptr(), std::ptr::null());
+            !hwnd.is_null() && IsWindowVisible(hwnd) != 0
+        }
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
@@ -652,6 +693,9 @@ mod imp {
     }
     pub fn has_screen_permission() -> bool {
         true
+    }
+    pub fn menu_open() -> bool {
+        false
     }
     pub fn request_screen_permission() {}
     pub fn raise_overlay(_win: &WebviewWindow) {}
