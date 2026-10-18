@@ -229,7 +229,9 @@ fn run_capture(app: &AppHandle, mode: Mode) -> Result<(), String> {
     } else {
         mode
     };
-    let frozen = if state.settings().live_selection {
+    // Live selection captures after the overlay has taken focus, which closes
+    // an open menu, so freeze the screen while it is still showing.
+    let frozen = if state.settings().live_selection && !platform::menu_open() {
         capture::monitors()?
     } else {
         capture::freeze_all()?
