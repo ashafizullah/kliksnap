@@ -56,7 +56,9 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
         // of KlikSnap's windows out).
         platform::prepare_live_overlay(&window);
         platform::show_inactive(&window);
-    } else if label.starts_with("preview-") || ["toast", "countdown", "clicks"].contains(&label) {
+    } else if label.starts_with("preview-")
+        || ["toast", "countdown", "clicks", "camera"].contains(&label)
+    {
         platform::show_inactive(&window);
     } else {
         let _ = window.show();
@@ -149,6 +151,18 @@ pub fn end_scroll(app: AppHandle, done: bool) {
 #[tauri::command]
 pub fn stop_recording(app: AppHandle) {
     crate::stop_recording(&app);
+}
+
+/// The user is dragging the recording controls somewhere.
+#[tauri::command]
+pub fn controls_moved() {
+    crate::controls_moved();
+}
+
+/// The webcam bubble couldn't get the camera.
+#[tauri::command]
+pub fn camera_failed(app: AppHandle, denied: bool) {
+    crate::camera_failed(&app, denied);
 }
 
 /// Shows the file named by the current toast (a saved recording).
@@ -675,8 +689,10 @@ pub fn save_settings(
     settings: Settings,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let settings = settings.normalize();
+    let mut settings = settings.normalize();
     let old = state.settings();
+    // Saved when a recording stops, not by Settings, which may hold an old one.
+    settings.camera_last = old.camera_last;
     let print_screen_changed = settings.print_screen != old.print_screen;
     if print_screen_changed {
         platform::set_print_screen_opens_snipping(!settings.print_screen)?;

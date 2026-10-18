@@ -6,5 +6,8 @@
        access silently and KlikSnap never shows up under Privacy → Microphone. -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Likewise for the webcam bubble in recordings. -->
+  <key>com.apple.security.device.camera</key>
+  <true/>
 </dict>
 </plist>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { invoke, param, ready, shortcutLabel } from "./lib/api";
   import { tr } from "./lib/i18n";
 
@@ -16,6 +17,14 @@
     invoke("stop_recording");
   }
 
+  // Dragged anywhere but the button; it stays where it's put, rather than
+  // moving out of the webcam's way.
+  function drag(e: MouseEvent) {
+    if (e.button !== 0 || (e.target as Element).closest("button")) return;
+    invoke("controls_moved");
+    getCurrentWindow().startDragging();
+  }
+
   onMount(() => {
     const timer = setInterval(() => (elapsed = Math.floor((Date.now() - start) / 1000)), 250);
     tick().then(ready);
@@ -23,7 +32,8 @@
   });
 </script>
 
-<div class="bar">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="bar" onmousedown={drag}>
   <span class="dot" aria-hidden="true"></span>
   <span class="clock" aria-label={tr("Recording time")}>{clock}</span>
   {#if key}
@@ -50,6 +60,7 @@
     gap: 8px;
     padding: 0 8px 0 12px;
     color: #f2f2f7;
+    cursor: grab;
   }
   .dot {
     width: 10px;
@@ -74,6 +85,7 @@
     color: rgba(242, 242, 247, 0.75);
   }
   button {
+    cursor: default;
     display: flex;
     align-items: center;
     gap: 6px;

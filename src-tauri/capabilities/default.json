@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "KlikSnap windows only call KlikSnap's own commands and listen to events.",
-  "windows": ["overlay-*", "preview-*", "editor-*", "pin-*", "explain-*", "settings", "history", "update", "toast", "countdown", "recording", "scroll", "clicks"],
+  "windows": ["overlay-*", "preview-*", "editor-*", "pin-*", "explain-*", "settings", "history", "update", "toast", "countdown", "recording", "scroll", "clicks", "camera"],
   "permissions": ["core:event:default"]
 }

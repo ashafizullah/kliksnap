@@ -3,6 +3,19 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.0
+
+### New
+
+- Show your webcam in recordings: turn it on in Settings → Recording → Webcam (macOS and Windows). It is recorded with the screen and can be dragged anywhere while recording. Pick the camera, where it starts (a corner, or where you left it last time), its shape (circle, rounded or square), size, border thickness and color, mirroring and a shadow, with a live preview in Settings
+- While recording, the tray icon turns into a red dot: click it to stop. On macOS the recording time shows beside it
+
+### Improved
+
+- The recording controls move out of the webcam's way, and can be dragged elsewhere
+- Settings → Recording is split into Recording, Screen, Sound and Webcam sections
+- Double-click a slider in Settings to reset it
+
 ## 0.13.0
 
 ### New
