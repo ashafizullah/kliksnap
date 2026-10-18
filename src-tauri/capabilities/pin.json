@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pin",
-  "description": "Pins move and resize themselves; the update window grows to show all the notes.",
-  "windows": ["pin-*", "update"],
+  "description": "Pins move and resize themselves; the update window grows to show all the notes; the webcam and the recording controls are dragged around.",
+  "windows": ["pin-*", "update", "camera", "recording"],
   "permissions": ["core:window:allow-start-dragging", "core:window:allow-set-size"]
 }

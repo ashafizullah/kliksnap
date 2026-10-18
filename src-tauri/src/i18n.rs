@@ -86,6 +86,14 @@ const ID: &[(&str, &str)] = &[
         "Izinkan KlikSnap di Pengaturan Sistem → Privasi & Keamanan → Mikrofon.",
     ),
     ("Recording without sound", "Merekam tanpa suara"),
+    ("Recording without the camera", "Merekam tanpa kamera"),
+    ("Recording", "Merekam"),
+    ("Click to stop", "Klik untuk berhenti"),
+    (
+        "Allow KlikSnap in System Settings → Privacy & Security → Camera.",
+        "Izinkan KlikSnap di Pengaturan Sistem → Privasi & Keamanan → Kamera.",
+    ),
+    ("The camera couldn't be started.", "Kamera tidak bisa dinyalakan."),
     (
         "The sound couldn't be captured; the video is still recorded.",
         "Suara tidak bisa direkam; videonya tetap direkam.",

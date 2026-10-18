@@ -76,6 +76,8 @@ struct Recording {
     recorder: record::Recorder,
     path: std::path::PathBuf,
     bounds: Bounds,
+    /// Where the webcam could go, to remember where it was left.
+    camera: Option<ui::CameraLayout>,
 }
 
 /// The OCR result notice. An empty `text` means nothing was copied.
@@ -446,7 +448,15 @@ fn show_toast(app: &AppHandle, toast: Toast, bounds: &Bounds) -> Result<(), Stri
 /// save folder, as a GIF if `gif`, with a Stop control in the corner.
 fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let state = app.state::<AppState>();
-    let secs = state.settings().record_countdown;
+    let settings = state.settings();
+    let supported = cfg!(any(target_os = "macos", target_os = "windows"));
+    // Before the countdown, so the camera has warmed up and can be moved
+    // into place by the time recording starts.
+    let camera = (settings.record_camera && supported)
+        .then(|| show_camera(app, &bounds, rect, &settings))
+        .flatten();
+    let (camera, layout) = camera.unzip();
+    let secs = settings.record_countdown;
     if secs > 0 {
         let [fx, fy, fw, fh] = rect;
         let center = (
@@ -454,13 +464,22 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
             bounds.y as f64 + (fy + fh / 2.0) * bounds.h as f64,
         );
         if !countdown(app, &bounds, secs, Some(center)) {
+            if let Some(win) = &camera {
+                let _ = win.destroy();
+            }
             return;
         }
     }
-    let settings = state.settings();
-    let clicks = (settings.record_clicks && cfg!(any(target_os = "macos", target_os = "windows")))
+    let clicks = (settings.record_clicks && supported)
         .then(|| show_clicks(app, &bounds))
         .flatten();
+    // The camera may have closed itself meanwhile (no camera, not allowed).
+    let keep: Vec<u32> = [clicks.as_ref(), camera.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter(|w| w.is_visible().unwrap_or(false))
+        .map(platform::window_number)
+        .collect();
     let dir = settings.save_dir(app);
     let ext = if gif { "gif" } else { "mp4" };
     let path = output::unique_path(&dir, &settings.recording_name(ext));
@@ -478,11 +497,11 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 &path,
                 audio,
                 settings.record_cursor,
-                clicks.as_ref().map(platform::window_number),
+                &keep,
             )
         });
     if started.is_err() {
-        if let Some(win) = &clicks {
+        for win in [&clicks, &camera].into_iter().flatten() {
             let _ = win.destroy();
         }
     }
@@ -492,13 +511,17 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 recorder,
                 path: path.clone(),
                 bounds,
+                camera: layout,
             });
             if clicks.is_some() {
-                track_clicks(app.clone(), bounds, path);
+                track_clicks(app.clone(), bounds, path.clone());
             }
+            CONTROLS_MOVED.store(false, Ordering::SeqCst);
             if let Err(e) = ui::show_recording(app, &bounds, &settings.hotkey_record) {
                 eprintln!("recording controls: {e}");
             }
+            ui::keep_controls_clear(app, &bounds);
+            tick_tray(app.clone(), path);
             tray::refresh(app);
             let warning = warning.map(|w| match w {
                 record::SoundWarning::MicDenied => (
@@ -738,7 +761,8 @@ pub fn stop_recording(app: &AppHandle) {
     let Some(rec) = app.state::<AppState>().recording.lock().unwrap().take() else {
         return;
     };
-    for label in ["recording", "clicks"] {
+    remember_camera(app, &rec);
+    for label in ["recording", "clicks", "camera"] {
         if let Some(win) = app.get_webview_window(label) {
             let _ = win.destroy();
         }
@@ -769,17 +793,116 @@ pub fn stop_recording(app: &AppHandle) {
     });
 }
 
+/// The user moved the recording controls themselves, so they stay put.
+static CONTROLS_MOVED: AtomicBool = AtomicBool::new(false);
+
+pub fn controls_moved() {
+    CONTROLS_MOVED.store(true, Ordering::SeqCst);
+}
+
+/// Shows how long the recording at `path` has gone on in the tray, every
+/// second until it stops.
+fn tick_tray(app: AppHandle, path: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let recording = {
+                let state = app.state::<AppState>();
+                let rec = state.recording.lock().unwrap();
+                rec.as_ref().is_some_and(|r| r.path == path)
+            };
+            if !recording {
+                return;
+            }
+            tray::recording_time(&app, start.elapsed().as_secs());
+        }
+    });
+}
+
+/// Saves where the webcam was left, for the next recording to start there.
+fn remember_camera(app: &AppHandle, rec: &Recording) {
+    let (Some(win), Some(layout)) = (app.get_webview_window("camera"), &rec.camera) else {
+        return;
+    };
+    let Some(place) = ui::camera_place(&win, layout) else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    let mut s = state.settings.lock().unwrap();
+    s.camera_last = Some(place);
+    if let Err(e) = settings::store(app, &s) {
+        eprintln!("camera position: {e}");
+    }
+}
+
 /// Opens the window that shows clicks in the recording, once it is on
 /// screen, so macOS can be told to record it.
 fn show_clicks(app: &AppHandle, bounds: &Bounds) -> Option<WebviewWindow> {
     let win = ui::show_clicks(app, bounds)
         .map_err(|e| eprintln!("clicks: {e}"))
         .ok()?;
+    wait_visible(&win);
+    Some(win)
+}
+
+/// Opens the webcam bubble over `rect`, once it is on screen, so macOS can
+/// be told to record it.
+fn show_camera(
+    app: &AppHandle,
+    bounds: &Bounds,
+    rect: [f64; 4],
+    settings: &settings::Settings,
+) -> Option<(WebviewWindow, ui::CameraLayout)> {
+    let (win, layout) = ui::show_camera(app, bounds, rect, settings)
+        .map_err(|e| eprintln!("camera: {e}"))
+        .ok()?;
+    let (handle, b) = (app.clone(), *bounds);
+    win.on_window_event(move |e| {
+        if matches!(e, WindowEvent::Moved(_)) && !CONTROLS_MOVED.load(Ordering::SeqCst) {
+            ui::keep_controls_clear(&handle, &b);
+        }
+    });
+    wait_visible(&win);
+    Some((win, layout))
+}
+
+fn wait_visible(win: &WebviewWindow) {
     let wait = std::time::Instant::now();
     while !win.is_visible().unwrap_or(false) && wait.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(20));
     }
-    Some(win)
+}
+
+const CAMERA_SETTINGS: &str = "Allow KlikSnap in System Settings → Privacy & Security → Camera.";
+
+/// Closes the webcam bubble when the camera can't be used (none, busy, or
+/// not allowed if `denied`); the recording goes on without it.
+pub fn camera_failed(app: &AppHandle, denied: bool) {
+    if let Some(win) = app.get_webview_window("camera") {
+        let _ = win.destroy();
+    }
+    let recording = app
+        .state::<AppState>()
+        .recording
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|r| r.bounds);
+    let Some(bounds) = recording.or_else(|| capture::bounds_at(platform::cursor_pos()).ok()) else {
+        return;
+    };
+    let text = if denied && cfg!(target_os = "macos") {
+        i18n::tr(CAMERA_SETTINGS)
+    } else {
+        i18n::tr("The camera couldn't be started.")
+    };
+    let toast = Toast {
+        title: i18n::tr("Recording without the camera").into(),
+        text: text.into(),
+        ..Default::default()
+    };
+    let _ = show_toast(app, toast, &bounds);
 }
 
 #[derive(Clone, PartialEq, serde::Serialize)]
@@ -1123,6 +1246,8 @@ pub fn run() {
             commands::pin_shot,
             commands::pin_menu,
             commands::stop_recording,
+            commands::camera_failed,
+            commands::controls_moved,
             commands::reveal_toast_file,
             commands::export_image,
             commands::overlay_pick_color,

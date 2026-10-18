@@ -1,6 +1,7 @@
 //! Window creation and placement. Every window is created on demand and
 //! destroyed when closed, so an idle KlikSnap is just a tray icon.
 
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -443,6 +444,207 @@ pub fn show_clicks(app: &AppHandle, b: &Bounds) -> tauri::Result<WebviewWindow> 
     Ok(win)
 }
 
+/// Room around the webcam for its shadow, in logical pixels.
+const CAMERA_SHADOW: f64 = 16.0;
+
+/// Where the webcam can go in the region being recorded, in native units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CameraLayout {
+    /// The region.
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    /// Kept clear between the webcam and the region's edges.
+    gap: f64,
+    /// The webcam itself, and the room for its shadow on each side.
+    size: f64,
+    pad: f64,
+}
+
+impl CameraLayout {
+    /// The window's top-left corner for `anchor`: [0, 0] puts the webcam in
+    /// the top-left corner of the region, [1, 1] in the bottom-right.
+    fn position(&self, [ax, ay]: [f64; 2]) -> (f64, f64) {
+        let free_w = (self.w - 2.0 * self.gap - self.size).max(0.0);
+        let free_h = (self.h - 2.0 * self.gap - self.size).max(0.0);
+        (
+            self.x + self.gap + ax.clamp(0.0, 1.0) * free_w - self.pad,
+            self.y + self.gap + ay.clamp(0.0, 1.0) * free_h - self.pad,
+        )
+    }
+
+    /// The anchor of the window at `(x, y)`, the inverse of `position`.
+    fn anchor(&self, (x, y): (f64, f64)) -> [f64; 2] {
+        let along = |at: f64, start: f64, len: f64| {
+            let free = len - 2.0 * self.gap - self.size;
+            if free <= 0.0 {
+                0.5
+            } else {
+                ((at + self.pad - start - self.gap) / free).clamp(0.0, 1.0)
+            }
+        };
+        [along(x, self.x, self.w), along(y, self.y, self.h)]
+    }
+}
+
+/// The anchor of a corner in Settings ("bottom-left" and so on), or of
+/// where the webcam was left last time for "last".
+fn camera_anchor(s: &crate::settings::Settings) -> [f64; 2] {
+    match s.camera_position.as_str() {
+        "top-left" => [0.0, 0.0],
+        "top-right" => [1.0, 0.0],
+        "bottom-right" => [1.0, 1.0],
+        "last" => s.camera_last.unwrap_or([0.0, 1.0]),
+        _ => [0.0, 1.0],
+    }
+}
+
+/// Shows the webcam, sized, framed and placed as Settings say, over the
+/// region being recorded (`rect`, fractions of the monitor), so it is
+/// recorded too. It can be dragged elsewhere.
+pub fn show_camera(
+    app: &AppHandle,
+    b: &Bounds,
+    rect: [f64; 4],
+    s: &crate::settings::Settings,
+) -> tauri::Result<(WebviewWindow, CameraLayout)> {
+    if let Some(old) = app.get_webview_window("camera") {
+        old.destroy()?;
+    }
+    let area = Area {
+        x: b.x as f64,
+        y: b.y as f64,
+        w: b.w as f64,
+        h: b.h as f64,
+        scale: b.scale,
+    };
+    let [fx, fy, fw, fh] = rect;
+    let (rx, ry, rw, rh) = (
+        area.x + fx * area.w,
+        area.y + fy * area.h,
+        fw * area.w,
+        fh * area.h,
+    );
+    // A third of a small region at most, so it doesn't cover everything.
+    let size = (s.camera_size as f64)
+        .min(rw.min(rh) / area.n(1.0) / 3.0)
+        .max(64.0);
+    let pad = if s.camera_shadow { CAMERA_SHADOW } else { 0.0 };
+    let layout = CameraLayout {
+        x: rx,
+        y: ry,
+        w: rw,
+        h: rh,
+        gap: area.n(MARGIN).min(rw.min(rh) / 20.0),
+        size: area.n(size),
+        pad: area.n(pad),
+    };
+    let (x, y) = layout.position(camera_anchor(s));
+    let url = format!(
+        "camera.html?shape={}&border={}&color={}&mirror={}&shadow={}&device={}&label={}",
+        s.camera_shape,
+        if s.camera_border {
+            s.camera_border_width
+        } else {
+            0
+        },
+        encode_component(&s.camera_border_color),
+        s.camera_mirror as u8,
+        pad,
+        encode_component(&s.camera_device),
+        encode_component(&s.camera_device_label),
+    );
+    let win = WebviewWindowBuilder::new(app, "camera", WebviewUrl::App(url.into()))
+        .title("KlikSnap")
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .shadow(false)
+        .transparent(true)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible_on_all_workspaces(true)
+        .inner_size(size + 2.0 * pad, size + 2.0 * pad)
+        .visible(false)
+        .on_permission_request(allow_camera)
+        .build()?;
+    place(&win, &area, x, y, size + 2.0 * pad, size + 2.0 * pad);
+    Ok((win, layout))
+}
+
+/// Where the webcam window is now, as an anchor of `layout`.
+pub fn camera_place(win: &WebviewWindow, layout: &CameraLayout) -> Option<[f64; 2]> {
+    let pos = win.outer_position().ok()?;
+    let (x, y) = if cfg!(target_os = "macos") {
+        let p = pos.to_logical::<f64>(win.scale_factor().ok()?);
+        (p.x, p.y)
+    } else {
+        (pos.x as f64, pos.y as f64)
+    };
+    Some(layout.anchor((x, y)))
+}
+
+/// A window's frame in native units.
+fn frame(win: &WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    let (pos, size) = (win.outer_position().ok()?, win.outer_size().ok()?);
+    if cfg!(target_os = "macos") {
+        let k = win.scale_factor().ok()?;
+        let (p, s) = (pos.to_logical::<f64>(k), size.to_logical::<f64>(k));
+        Some((p.x, p.y, s.width, s.height))
+    } else {
+        Some((
+            pos.x as f64,
+            pos.y as f64,
+            size.width as f64,
+            size.height as f64,
+        ))
+    }
+}
+
+/// Moves the recording controls to another corner of the screen if the
+/// webcam covers them: the webcam is in the video, the controls aren't.
+pub fn keep_controls_clear(app: &AppHandle, b: &Bounds) {
+    let (Some(controls), Some(camera)) = (
+        app.get_webview_window("recording"),
+        app.get_webview_window("camera"),
+    ) else {
+        return;
+    };
+    let (Some((cx, cy, cw, ch)), Some((x, y, w, h))) = (frame(&camera), frame(&controls)) else {
+        return;
+    };
+    let covered = |x: f64, y: f64| x < cx + cw && cx < x + w && y < cy + ch && cy < y + h;
+    if !covered(x, y) {
+        return;
+    }
+    let area = work_area(app, b);
+    let m = area.n(MARGIN);
+    let (right, left) = (area.x + area.w - w - m, area.x + m);
+    let (bottom, top) = (area.y + area.h - h - m, area.y + m);
+    let corners = [(right, bottom), (left, bottom), (right, top), (left, top)];
+    if let Some(&(x, y)) = corners.iter().find(|(x, y)| !covered(*x, *y)) {
+        let _ = if cfg!(target_os = "macos") {
+            controls.set_position(LogicalPosition::new(x, y))
+        } else {
+            controls.set_position(PhysicalPosition::new(x as i32, y as i32))
+        };
+    }
+}
+
+/// The OS still asks for the camera the first time; the webview needn't ask
+/// again.
+fn allow_camera<R: tauri::Runtime>(
+    _: tauri::Webview<R>,
+    kind: PermissionKind,
+) -> PermissionResponse {
+    match kind {
+        PermissionKind::Camera => PermissionResponse::Allow,
+        _ => PermissionResponse::Deny,
+    }
+}
+
 /// Pins a shot to the screen: a borderless window that stays on top, at
 /// `origin` (where the shot was taken) at its actual size when it fits.
 /// Returns the window label.
@@ -610,6 +812,38 @@ pub fn open_settings_tab(app: &AppHandle, tab: &str) -> tauri::Result<()> {
         .minimizable(false)
         .center()
         .visible(false)
+        // To list the cameras by name.
+        .on_permission_request(allow_camera)
         .build()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LAYOUT: CameraLayout = CameraLayout {
+        x: 100.0,
+        y: 50.0,
+        w: 800.0,
+        h: 600.0,
+        gap: 16.0,
+        size: 180.0,
+        pad: 16.0,
+    };
+
+    #[test]
+    fn camera_corners_keep_their_gap() {
+        assert_eq!(LAYOUT.position([0.0, 0.0]), (100.0, 50.0));
+        assert_eq!(LAYOUT.position([1.0, 1.0]), (688.0, 438.0));
+    }
+
+    #[test]
+    fn camera_anchor_undoes_position() {
+        for a in [[0.0, 1.0], [0.25, 0.75], [1.0, 0.0]] {
+            assert_eq!(LAYOUT.anchor(LAYOUT.position(a)), a);
+        }
+        // Dragged out of the region: the nearest edge.
+        assert_eq!(LAYOUT.anchor((-500.0, 5000.0)), [0.0, 1.0]);
+    }
 }

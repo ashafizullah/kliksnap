@@ -38,9 +38,9 @@ pub enum SoundWarning {
 /// Starts recording `rect` (fractions of monitor `b`) into an MP4 at `path`,
 /// or a GIF if the path ends in `.gif`, at `percent` of the screen's
 /// resolution, with the mouse pointer drawn in if `cursor`. KlikSnap's own
-/// windows are left out, except `keep` (a macOS window number; Windows and
-/// Linux record every window anyway). Sound that can't be captured is left out rather than failing
-/// the recording; the warning says so.
+/// windows are left out, except those in `keep` (macOS window numbers;
+/// Windows and Linux record every window anyway). Sound that can't be
+/// captured is left out rather than failing the recording; the warning says so.
 pub fn start(
     b: &Bounds,
     rect: [f64; 4],
@@ -48,7 +48,7 @@ pub fn start(
     path: &Path,
     audio: Audio,
     cursor: bool,
-    keep: Option<u32>,
+    keep: &[u32],
 ) -> Result<(Recorder, Option<SoundWarning>), String> {
     let mut r = region(b, rect, percent);
     let audio = if is_gif(path) {
@@ -386,7 +386,7 @@ mod imp {
             path: &Path,
             audio: super::Audio,
             cursor: bool,
-            keep: Option<u32>,
+            keep: &[u32],
         ) -> Result<Self, String> {
             let content = shareable_content()?;
             let display = unsafe { content.displays() }
@@ -404,7 +404,7 @@ mod imp {
             let own = NSArray::from_retained_slice(&own);
             let kept: Vec<_> = unsafe { content.windows() }
                 .iter()
-                .filter(|w| Some(unsafe { w.windowID() }) == keep)
+                .filter(|w| keep.contains(&unsafe { w.windowID() }))
                 .collect();
             let filter = unsafe {
                 SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows(
@@ -983,7 +983,7 @@ mod imp {
             path: &Path,
             audio: super::Audio,
             cursor: bool,
-            _keep: Option<u32>,
+            _keep: &[u32],
         ) -> Result<Self, String> {
             let with_sound = audio.system || audio.mic;
             let center = POINT {
@@ -1077,7 +1077,7 @@ mod imp {
             path: &Path,
             audio: Audio,
             cursor: bool,
-            _keep: Option<u32>,
+            _keep: &[u32],
         ) -> Result<Self, String> {
             if std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland") {
                 return Err("recording on Wayland isn't supported yet: log in with an X11 (Xorg) session to record".into());
@@ -1298,7 +1298,7 @@ mod tests {
                 &path,
                 Audio::default(),
                 true,
-                None,
+                &[],
             )
             .unwrap();
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1319,7 +1319,7 @@ mod tests {
             system: true,
             mic: false,
         };
-        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio, true, None).unwrap();
+        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio, true, &[]).unwrap();
         assert_eq!(warning, None);
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
@@ -1340,7 +1340,7 @@ mod tests {
             &path,
             Audio::default(),
             true,
-            None,
+            &[],
         )
         .unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));

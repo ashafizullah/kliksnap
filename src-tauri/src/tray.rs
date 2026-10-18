@@ -1,5 +1,6 @@
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
 use crate::capture::Mode;
@@ -110,20 +111,55 @@ fn on_delay(app: &AppHandle, id: &str) {
     }
 }
 
-pub fn create(app: &AppHandle) -> tauri::Result<()> {
-    // macOS: a template image, drawn white or black like the other menu bar
-    // icons. Windows: the app icon, which shows on light and dark taskbars.
-    let icon = if cfg!(target_os = "macos") {
+/// macOS: a template image, drawn white or black like the other menu bar
+/// icons. Windows: the app icon, which shows on light and dark taskbars.
+fn idle_icon() -> Image<'static> {
+    if cfg!(target_os = "macos") {
         tauri::include_image!("icons/tray.png")
     } else {
         tauri::include_image!("icons/64x64.png")
-    };
+    }
+}
+
+/// A red dot, shown while recording: in color, not a template.
+fn recording_icon() -> Image<'static> {
+    // 22 points at 2x on macOS; the size Windows asks for at 200%.
+    const SIZE: usize = if cfg!(target_os = "macos") { 44 } else { 32 };
+    let c = SIZE as f64 / 2.0;
+    let r = SIZE as f64 * 0.3;
+    let mut rgba = vec![0u8; SIZE * SIZE * 4];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let d = ((x as f64 + 0.5 - c).powi(2) + (y as f64 + 0.5 - c).powi(2)).sqrt();
+            // One pixel of antialiasing at the edge.
+            let a = (r + 0.5 - d).clamp(0.0, 1.0);
+            rgba[(y * SIZE + x) * 4..][..4].copy_from_slice(&[255, 59, 48, (a * 255.0) as u8]);
+        }
+    }
+    Image::new_owned(rgba, SIZE as u32, SIZE as u32)
+}
+
+pub fn create(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
+        .icon(idle_icon())
         .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("KlikSnap")
         .menu(&menu(app)?)
         .show_menu_on_left_click(true)
+        // While recording, a click stops it; the menu is on the right button.
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                if app.state::<AppState>().recording.lock().unwrap().is_some() {
+                    crate::stop_recording(app);
+                }
+            }
+        })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "area" => crate::start_capture(app, Mode::Area),
             "window" => crate::start_capture(app, Mode::Window),
@@ -162,8 +198,37 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
 }
 
 /// Rebuilds the menu so it shows the current hotkeys.
+/// Rebuilds the menu, and shows whether a recording is going on.
 pub fn refresh(app: &AppHandle) {
-    if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), menu(app)) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    if let Ok(menu) = menu(app) {
         let _ = tray.set_menu(Some(menu));
     }
+    let recording = app.state::<AppState>().recording.lock().unwrap().is_some();
+    if recording {
+        let _ = tray.set_icon_with_as_template(Some(recording_icon()), false);
+        recording_time(app, 0);
+    } else {
+        let _ = tray.set_icon_with_as_template(Some(idle_icon()), cfg!(target_os = "macos"));
+        let _ = tray.set_title(None::<&str>);
+        let _ = tray.set_tooltip(Some("KlikSnap"));
+    }
+    let _ = tray.set_show_menu_on_left_click(!recording);
+}
+
+/// Shows how long the recording has gone on: beside the icon on macOS, in
+/// its tooltip everywhere (Windows can't show text beside it).
+pub fn recording_time(app: &AppHandle, secs: u64) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    let clock = format!("{}:{:02}", secs / 60, secs % 60);
+    let _ = tray.set_title(Some(&clock));
+    let _ = tray.set_tooltip(Some(format!(
+        "KlikSnap · {} {clock} · {}",
+        tr("Recording"),
+        tr("Click to stop")
+    )));
 }

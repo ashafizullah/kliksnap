@@ -4,6 +4,7 @@
   import { invoke, isLinux, isMac, isWindows, param, ready, shortcutLabel } from "./lib/api";
   import { tr } from "./lib/i18n";
   import { LANGUAGES } from "./lib/languages";
+  import { RADIUS, listCameras, openCamera, type Camera } from "./lib/camera";
 
   type Settings = {
     hotkey_area: string;
@@ -29,6 +30,17 @@
     record_mic: boolean;
     record_cursor: boolean;
     record_clicks: boolean;
+    record_camera: boolean;
+    camera_size: number;
+    camera_shape: "circle" | "rounded" | "square";
+    camera_border: boolean;
+    camera_border_width: number;
+    camera_border_color: string;
+    camera_mirror: boolean;
+    camera_shadow: boolean;
+    camera_device: string;
+    camera_device_label: string;
+    camera_position: "bottom-left" | "bottom-right" | "top-left" | "top-right" | "last";
     preview_secs: number;
     history_limit: number;
     live_selection: boolean;
@@ -194,6 +206,49 @@
     saveTimer = setTimeout(save, 400);
   }
 
+  // The camera runs in the preview while the webcam options are on screen
+  // (not just for opening Settings), and names the cameras once it does.
+  let cameras = $state<Camera[]>([]);
+  let previewVideo = $state<HTMLVideoElement>();
+  let previewLive = $state(false);
+  let cameraFailed = $state(false);
+  let pageHidden = $state(document.hidden);
+  $effect(() => {
+    if (tab !== "recording" || !s?.record_camera || isLinux || pageHidden) return;
+    const [id, label] = [s.camera_device, s.camera_device_label];
+    let stream: MediaStream | undefined;
+    let stopped = false;
+    openCamera(id, label)
+      .then(async (opened) => {
+        if (stopped) return opened.getTracks().forEach((t) => t.stop());
+        stream = opened;
+        cameraFailed = false;
+        if (previewVideo) previewVideo.srcObject = opened;
+        cameras = await listCameras();
+      })
+      .catch(() => (cameraFailed = !stopped));
+    return () => {
+      stopped = true;
+      stream?.getTracks().forEach((t) => t.stop());
+      previewLive = false;
+    };
+  });
+
+  function pickCamera(e: Event) {
+    if (!s) return;
+    const id = (e.currentTarget as HTMLSelectElement).value;
+    s.camera_device = id;
+    s.camera_device_label = cameras.find((c) => c.id === id)?.label ?? "";
+    save();
+  }
+
+  /** Puts a slider back to its default (the one in settings.rs). */
+  function reset(key: "jpg_quality" | "camera_size" | "camera_border_width", value: number) {
+    if (!s || s[key] === value) return;
+    s[key] = value;
+    save();
+  }
+
   async function save() {
     if (!s) return;
     try {
@@ -256,6 +311,9 @@
   }
 
   onMount(() => {
+    // The camera stops while Settings is hidden.
+    const visibility = () => (pageHidden = document.hidden);
+    document.addEventListener("visibilitychange", visibility);
     // Sent when something asks for a tab while Settings is already open.
     const unlisten = listen<string>("settings:tab", (e) => {
       if (isTab(e.payload)) selectTab(e.payload);
@@ -265,7 +323,10 @@
       await tick();
       ready();
     })();
-    return () => unlisten.then((off) => off());
+    return () => {
+      unlisten.then((off) => off());
+      document.removeEventListener("visibilitychange", visibility);
+    };
   });
 </script>
 
@@ -461,7 +522,7 @@
             <label class="row">
               <span>{tr("JPG quality")}</span>
               <span class="range">
-                <input type="range" min="40" max="100" step="5" bind:value={s.jpg_quality} onchange={save} />
+                <input type="range" min="40" max="100" step="5" bind:value={s.jpg_quality} onchange={save} ondblclick={() => reset("jpg_quality", 90)} title={tr("Double-click to reset")} />
                 <span class="value">{s.jpg_quality}</span>
               </span>
             </label>
@@ -501,6 +562,21 @@
               : tr("Full detail; the largest files.")}
           </p>
           <label class="row">
+            <span>{tr("File name")}</span>
+            <input class="template" type="text" spellcheck="false" bind:value={s.record_template} onchange={save} />
+          </label>
+          <p class="hint">
+            {recordExample}<br />
+            {tr("Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.")}
+          </p>
+          {#if isLinux}
+            <p class="hint">{tr("Recording needs ffmpeg and an X11 session; it doesn't work on Wayland yet.")}</p>
+          {/if}
+        </section>
+
+        <section>
+          <h2>{tr("Screen")}</h2>
+          <label class="row">
             <span>{tr("Show mouse pointer")}</span>
             <input type="checkbox" bind:checked={s.record_cursor} onchange={save} />
           </label>
@@ -510,17 +586,6 @@
               <input type="checkbox" bind:checked={s.record_clicks} onchange={save} />
             </label>
           {/if}
-          {#if isLinux}
-            <p class="hint">{tr("Recording needs ffmpeg and an X11 session; it doesn't work on Wayland yet.")}</p>
-          {/if}
-          <label class="row">
-            <span>{tr("File name")}</span>
-            <input class="template" type="text" spellcheck="false" bind:value={s.record_template} onchange={save} />
-          </label>
-          <p class="hint">
-            {recordExample}<br />
-            {tr("Date fields: %Y year, %m month, %d day, %H hour, %M minute, %S second.")}
-          </p>
         </section>
 
         <section>
@@ -541,6 +606,112 @@
               : tr("Both are mixed into one track. GIFs have no sound.")}
           </p>
         </section>
+
+        {#if !isLinux}
+          <section>
+            <h2>{tr("Webcam")}</h2>
+            <label class="row">
+              <span>{tr("Show webcam")}</span>
+              <input type="checkbox" bind:checked={s.record_camera} onchange={save} />
+            </label>
+            <p class="hint">{tr("The webcam is recorded with the screen; drag it where you like.")}</p>
+            {#if s.record_camera && cameraFailed}
+              <p class="hint error">{tr("The camera couldn't be started.")}</p>
+            {/if}
+            {#if s.record_camera}
+              <div class="camera-settings">
+                <div class="camera-options">
+                  <label class="row">
+                    <span>{tr("Camera")}</span>
+                    <select class="camera-device" value={s.camera_device} onchange={pickCamera}>
+                      <option value="">{tr("Default")}</option>
+                      {#each cameras as c (c.id)}
+                        <option value={c.id}>{c.label || tr("Camera")}</option>
+                      {/each}
+                      {#if s.camera_device && !cameras.some((c) => c.id === s?.camera_device)}
+                        <option value={s.camera_device}>{s.camera_device_label || tr("Camera")}</option>
+                      {/if}
+                    </select>
+                  </label>
+                  <label class="row">
+                    <span>{tr("Starts at")}</span>
+                    <select bind:value={s.camera_position} onchange={save}>
+                      <option value="bottom-left">{tr("Bottom left")}</option>
+                      <option value="bottom-right">{tr("Bottom right")}</option>
+                      <option value="top-left">{tr("Top left")}</option>
+                      <option value="top-right">{tr("Top right")}</option>
+                      <option value="last">{tr("Where I left it")}</option>
+                    </select>
+                  </label>
+                  <h3>{tr("Look")}</h3>
+                  <label class="row">
+                    <span>{tr("Shape")}</span>
+                    <select bind:value={s.camera_shape} onchange={save}>
+                      <option value="circle">{tr("Circle")}</option>
+                      <option value="rounded">{tr("Rounded square")}</option>
+                      <option value="square">{tr("Square")}</option>
+                    </select>
+                  </label>
+                  <label class="row">
+                    <span>{tr("Size")}</span>
+                    <span class="range">
+                      <input type="range" min="80" max="400" step="10" bind:value={s.camera_size} onchange={save} ondblclick={() => reset("camera_size", 180)} title={tr("Double-click to reset")} />
+                      <span class="value">{s.camera_size}</span>
+                    </span>
+                  </label>
+                  <label class="row">
+                    <span>{tr("Mirror the webcam")}</span>
+                    <input type="checkbox" bind:checked={s.camera_mirror} onchange={save} />
+                  </label>
+                  <h3>{tr("Border and shadow")}</h3>
+                  <label class="row">
+                    <span>{tr("Border")}</span>
+                    <input type="checkbox" bind:checked={s.camera_border} onchange={save} />
+                  </label>
+                  {#if s.camera_border}
+                    <label class="row">
+                      <span>{tr("Border thickness")}</span>
+                      <span class="range">
+                        <input type="range" min="1" max="16" step="1" bind:value={s.camera_border_width} onchange={save} ondblclick={() => reset("camera_border_width", 3)} title={tr("Double-click to reset")} />
+                        <span class="value">{s.camera_border_width}</span>
+                      </span>
+                    </label>
+                    <label class="row">
+                      <span>{tr("Border color")}</span>
+                      <input type="color" bind:value={s.camera_border_color} onchange={save} />
+                    </label>
+                  {/if}
+                  <label class="row">
+                    <span>{tr("Shadow")}</span>
+                    <input type="checkbox" bind:checked={s.camera_shadow} onchange={save} />
+                  </label>
+                </div>
+                <!-- At a third of its size, as a guide to the shape and border, in a
+                     frame that fits the largest so the options beside it never move. -->
+                <div class="camera-frame" aria-hidden="true">
+                  <div
+                    class="camera-preview"
+                    class:shadow={s.camera_shadow}
+                    style:width="{s.camera_size / 3}px"
+                    style:height="{s.camera_size / 3}px"
+                    style:border-radius={RADIUS[s.camera_shape]}
+                    style:border={s.camera_border ? `${Math.max(1, s.camera_border_width / 3)}px solid ${s.camera_border_color}` : "none"}
+                  >
+                    <video
+                      bind:this={previewVideo}
+                      class:live={previewLive}
+                      class:mirror={s.camera_mirror}
+                      autoplay
+                      muted
+                      playsinline
+                      onplaying={() => (previewLive = true)}
+                    ></video>
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </section>
+        {/if}
       {:else if tab === "ai"}
         <section>
           <h2>{tr("AI model")}</h2>
@@ -862,5 +1033,55 @@
   }
   .ok {
     color: var(--accent);
+  }
+  h3 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    margin: 10px 0 2px;
+  }
+  .camera-settings {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+  .camera-options {
+    flex: 1;
+    min-width: 0;
+  }
+  /* Stays in view while the options below are changed. */
+  .camera-frame {
+    position: sticky;
+    top: 12px;
+    margin-top: 8px;
+    flex: none;
+    width: 140px;
+    height: 140px;
+    display: grid;
+    place-items: center;
+  }
+  .camera-preview {
+    box-sizing: border-box;
+    overflow: hidden;
+    background: linear-gradient(160deg, #6b7280, #374151);
+  }
+  .camera-preview video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .camera-preview video.live {
+    opacity: 1;
+  }
+  .camera-preview video.mirror {
+    transform: scaleX(-1);
+  }
+  .camera-preview.shadow {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  }
+  .camera-device {
+    max-width: 180px;
   }
 </style>

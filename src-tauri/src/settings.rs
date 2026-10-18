@@ -52,6 +52,31 @@ pub struct Settings {
     pub record_cursor: bool,
     /// Recordings show a ripple where the mouse is clicked (not on Linux).
     pub record_clicks: bool,
+    /// Recordings show the webcam in a round bubble (not on Linux).
+    pub record_camera: bool,
+    /// The webcam's width and height, in logical pixels.
+    pub camera_size: u32,
+    /// "circle", "rounded" or "square".
+    pub camera_shape: String,
+    pub camera_border: bool,
+    /// Logical pixels.
+    pub camera_border_width: u32,
+    /// "#rrggbb".
+    pub camera_border_color: String,
+    /// The webcam shows people as in a mirror.
+    pub camera_mirror: bool,
+    /// The webcam casts a shadow.
+    pub camera_shadow: bool,
+    /// The camera's device ID in the webviews, and its name in case the ID
+    /// changes; empty uses the system's default camera.
+    pub camera_device: String,
+    pub camera_device_label: String,
+    /// Where the webcam starts: "bottom-left", "bottom-right", "top-left",
+    /// "top-right" or "last" (where it was left last time).
+    pub camera_position: String,
+    /// Where the webcam was left last time, as fractions of the room it had
+    /// in the region recorded; saved when a recording stops.
+    pub camera_last: Option<[f64; 2]>,
     /// How many recent captures History keeps; 0 keeps none.
     pub history_limit: u32,
     /// Seconds before the floating preview hides itself; 0 keeps it open.
@@ -104,6 +129,18 @@ impl Default for Settings {
             record_mic: false,
             record_cursor: true,
             record_clicks: false,
+            record_camera: false,
+            camera_size: 180,
+            camera_shape: "circle".into(),
+            camera_border: true,
+            camera_border_width: 3,
+            camera_border_color: "#ffffff".into(),
+            camera_mirror: true,
+            camera_shadow: false,
+            camera_device: String::new(),
+            camera_device_label: String::new(),
+            camera_position: "bottom-left".into(),
+            camera_last: None,
             preview_secs: 6,
             history_limit: 50,
             live_selection: true,
@@ -119,6 +156,10 @@ impl Default for Settings {
         }
     }
 }
+
+/// The webcam's size range, in logical pixels.
+pub const CAMERA_MIN: u32 = 80;
+pub const CAMERA_MAX: u32 = 400;
 
 impl Settings {
     pub fn format(&self) -> Format {
@@ -148,6 +189,25 @@ impl Settings {
             self.ai_profiles.push(crate::ai::Profile::openai());
         }
         self.ai_profile = self.ai_profile.min(self.ai_profiles.len() - 1);
+        self.camera_size = self.camera_size.clamp(CAMERA_MIN, CAMERA_MAX);
+        if !["circle", "rounded", "square"].contains(&self.camera_shape.as_str()) {
+            self.camera_shape = "circle".into();
+        }
+        self.camera_border_width = self.camera_border_width.clamp(1, 16);
+        let corners = [
+            "bottom-left",
+            "bottom-right",
+            "top-left",
+            "top-right",
+            "last",
+        ];
+        if !corners.contains(&self.camera_position.as_str()) {
+            self.camera_position = "bottom-left".into();
+        }
+        let c = &self.camera_border_color;
+        if !(c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|c| c.is_ascii_hexdigit())) {
+            self.camera_border_color = "#ffffff".into();
+        }
         self
     }
 
@@ -218,5 +278,20 @@ mod tests {
         assert_eq!(s.ai_profile, 0);
         assert!(s.ai(None).is_some());
         assert!(!s.ai_actions.is_empty());
+    }
+
+    #[test]
+    fn normalize_keeps_the_webcam_valid() {
+        let s: Settings = serde_json::from_str(
+            r##"{"camera_size": 5000, "camera_shape": "star", "camera_border_width": 0,
+                "camera_border_color": "red", "camera_position": "middle"}"##,
+        )
+        .unwrap();
+        let s = s.normalize();
+        assert_eq!(s.camera_size, CAMERA_MAX);
+        assert_eq!(s.camera_shape, "circle");
+        assert_eq!(s.camera_border_width, 1);
+        assert_eq!(s.camera_border_color, "#ffffff");
+        assert_eq!(s.camera_position, "bottom-left");
     }
 }
