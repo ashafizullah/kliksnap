@@ -24,6 +24,10 @@
   <a href="https://trakteer.id/adamshafizullah/tip"><img src="https://img.shields.io/badge/Buy%20me%20an%20AI%20token-Trakteer-C02E2E?style=for-the-badge" alt="Buy me an AI token on Trakteer"></a>
 </p>
 
+<p align="center">
+  Part of <a href="https://klikapps.pages.dev"><b>Klik Apps</b></a>, a family of free, open-source desktop apps: <a href="https://klikapps.pages.dev">klikapps.pages.dev</a>
+</p>
+
 ## Features
 
 - **Capture** an area, a window, or the whole screen from a global shortcut or the menu bar / tray icon
