@@ -160,7 +160,7 @@ KlikSnap is free and always will be. If it saves you time, **[buy me an AI token
 
 ## Contributing
 
-Issues and pull requests are welcome. `main` is protected: every change goes through a pull request and must pass CI (type checks, `cargo fmt`, `clippy` and tests on macOS, Windows and Linux). Please run `npm run check` and `cargo clippy` locally before opening a PR.
+Issues and pull requests are welcome. `main` is protected: every change goes through a pull request and must pass CI (type checks, `cargo fmt`, `clippy` and tests on macOS, Windows and Linux). Please run `npm run check` and `cargo clippy` locally before opening a PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and guidelines.
 
 ## License
 
