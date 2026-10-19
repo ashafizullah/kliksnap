@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.2
+
+### Fixed
+
+- Windows: screenshots keep the tray's hidden-icons flyout (the up arrow) open in the picture instead of closing it when you start selecting
+
 ## 0.14.1
 
 ### Fixed

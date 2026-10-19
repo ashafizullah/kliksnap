@@ -484,6 +484,16 @@ mod imp {
         fn IsWindowVisible(hwnd: *mut std::ffi::c_void) -> i32;
     }
 
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmGetWindowAttribute(
+            hwnd: *mut std::ffi::c_void,
+            attribute: u32,
+            value: *mut std::ffi::c_void,
+            size: u32,
+        ) -> i32;
+    }
+
     /// Keeps a live-selection overlay out of screen captures (Windows 10
     /// 2004+), so the loupe sees what's below it. There is no window number.
     pub fn prepare_live_overlay(win: &WebviewWindow) -> u32 {
@@ -546,14 +556,38 @@ mod imp {
     pub fn has_screen_permission() -> bool {
         true
     }
-    /// Whether a menu is open on screen: a tray or context menu of any app.
-    /// It closes as soon as the overlay takes focus.
+    /// Whether a menu is open on screen: a tray or context menu of any app,
+    /// or the tray's hidden-icons flyout. It closes as soon as the overlay
+    /// takes focus.
     pub fn menu_open() -> bool {
-        // Every popup menu is a window of the system class "#32768".
-        let class: Vec<u16> = "#32768\0".encode_utf16().collect();
+        // Every popup menu is a window of the system class "#32768"; the
+        // hidden-icons flyout is its own window on Windows 11 and on 10.
+        [
+            "#32768",
+            "TopLevelWindowForOverflowXamlIsland",
+            "NotifyIconOverflowWindow",
+        ]
+        .iter()
+        .any(|class| shown(class))
+    }
+
+    fn shown(class: &str) -> bool {
+        const DWMWA_CLOAKED: u32 = 14;
+        let class: Vec<u16> = class.encode_utf16().chain([0]).collect();
         unsafe {
             let hwnd = FindWindowW(class.as_ptr(), std::ptr::null());
-            !hwnd.is_null() && IsWindowVisible(hwnd) != 0
+            if hwnd.is_null() || IsWindowVisible(hwnd) == 0 {
+                return false;
+            }
+            // Windows 11 hides XAML flyouts by cloaking them, not by hiding them.
+            let mut cloaked = 0u32;
+            let ok = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut cloaked as *mut u32 as *mut std::ffi::c_void,
+                4,
+            );
+            ok != 0 || cloaked == 0
         }
     }
     pub fn request_screen_permission() {}
