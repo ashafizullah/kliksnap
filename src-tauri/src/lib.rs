@@ -7,7 +7,6 @@ mod gif_writer;
 mod history;
 mod hotkeys;
 mod i18n;
-mod migrate;
 mod ocr;
 mod output;
 mod platform;
@@ -1170,8 +1169,6 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let context = tauri::generate_context!();
-    migrate::run(&context.config().identifier);
     tauri::Builder::default()
         // First, so a second launch exits before setting anything up. It opens
         // Settings instead, the way back in when the tray icon is hidden.
@@ -1281,7 +1278,7 @@ pub fn run() {
             commands::app_version,
             commands::quit,
         ])
-        .build(context)
+        .build(tauri::generate_context!())
         .expect("error while building KlikSnap")
         .run(|_, event| {
             // Closing the last window must not quit a tray app.
