@@ -70,6 +70,7 @@ fn scan_qr(img: &RgbaImage) -> Result<Vec<String>, String> {
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ffi::{c_void, CStr};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use objc2::rc::{autoreleasepool, Allocated, Retained};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
@@ -198,10 +199,69 @@ mod imp {
         Ok(request)
     }
 
-    unsafe fn run_vision(cg_image: *mut c_void) -> Result<String, String> {
+    static ON_CPU: AtomicBool = AtomicBool::new(false);
+
+    /// Runs a text request, moving to the CPU for good once it fails: after
+    /// some system events the Neural Engine stops running the text model for
+    /// the rest of the process (E5RT error 13, so CRImageReaderError 1).
+    /// Returns the request too, as it owns the observations.
+    unsafe fn perform_text(
+        cg_image: *mut c_void,
+    ) -> Result<(Retained<AnyObject>, Vec<*mut AnyObject>), String> {
+        if !ON_CPU.load(Ordering::Relaxed) {
+            let request = text_request()?;
+            match perform(cg_image, &request) {
+                Ok(observations) => return Ok((request, observations)),
+                Err(e) => eprintln!("text recognition failed ({e}); retrying on the CPU"),
+            }
+            ON_CPU.store(true, Ordering::Relaxed);
+        }
         let request = text_request()?;
+        use_cpu(&request)?;
+        let observations = perform(cg_image, &request)?;
+        Ok((request, observations))
+    }
+
+    /// Sends every stage of the request to the CPU.
+    unsafe fn use_cpu(request: &AnyObject) -> Result<(), String> {
+        let modern: Bool = msg_send![
+            request,
+            respondsToSelector: sel!(supportedComputeStageDevicesAndReturnError:)
+        ];
+        if !modern.as_bool() {
+            let _: () = msg_send![request, setUsesCPUOnly: true];
+            return Ok(());
+        }
+        let cpu = class(c"MLCPUComputeDevice")?;
+        let mut error: *mut AnyObject = std::ptr::null_mut();
+        let stages: *mut AnyObject =
+            msg_send![request, supportedComputeStageDevicesAndReturnError: &mut error];
+        if stages.is_null() {
+            return Err(describe(error));
+        }
+        let keys: *mut AnyObject = msg_send![stages, allKeys];
+        let count: usize = msg_send![keys, count];
+        for i in 0..count {
+            let stage: *mut AnyObject = msg_send![keys, objectAtIndex: i];
+            let devices: *mut AnyObject = msg_send![stages, objectForKey: stage];
+            let n: usize = msg_send![devices, count];
+            for j in 0..n {
+                let device: *mut AnyObject = msg_send![devices, objectAtIndex: j];
+                let is_cpu: Bool = msg_send![device, isKindOfClass: cpu];
+                if is_cpu.as_bool() {
+                    let _: () =
+                        msg_send![request, setComputeDevice: device, forComputeStage: stage];
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    unsafe fn run_vision(cg_image: *mut c_void) -> Result<String, String> {
+        let (_request, observations) = perform_text(cg_image)?;
         let mut lines = Vec::new();
-        for observation in perform(cg_image, &request)? {
+        for observation in observations {
             let candidates: *mut AnyObject = msg_send![observation, topCandidates: 1usize];
             let best: *mut AnyObject = msg_send![candidates, firstObject];
             if best.is_null() {
@@ -219,9 +279,9 @@ mod imp {
         cg_image: *mut c_void,
         (w, h): (f64, f64),
     ) -> Result<Vec<super::Word>, String> {
-        let request = text_request()?;
+        let (_request, observations) = perform_text(cg_image)?;
         let mut words = Vec::new();
-        for (line, observation) in perform(cg_image, &request)?.into_iter().enumerate() {
+        for (line, observation) in observations.into_iter().enumerate() {
             let candidates: *mut AnyObject = msg_send![observation, topCandidates: 1usize];
             let best: *mut AnyObject = msg_send![candidates, firstObject];
             if best.is_null() {

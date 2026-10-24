@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.5
+
+### Fixed
+
+- Copy Text on macOS no longer keeps failing with "CRImageReaderError error 1" until KlikSnap is restarted: when the Neural Engine stops reading text, it reads on the CPU instead
+
 ## 0.14.4
 
 ### Changed
