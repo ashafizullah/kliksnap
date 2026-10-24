@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.4
+
+### Changed
+
+- Data saved under the old `com.kliksnap.app` identifier is no longer moved over. Updating straight from 0.14.2 or earlier: settings, capture history and editor preferences start fresh
+
 ## 0.14.3
 
 ### Changed
