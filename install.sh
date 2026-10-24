@@ -50,10 +50,12 @@ mkdir -p "$mnt"
 hdiutil attach -nobrowse -readonly -quiet -mountpoint "$mnt" "$tmp/KlikSnap.dmg"
 [ -d "$mnt/$APP_NAME" ] || die "$APP_NAME not found in the DMG"
 
-if pgrep -xq KlikSnap; then
+# Match the installed bundle's executable by path: its name is lowercase `kliksnap`.
+running="$DEST/$APP_NAME/Contents/MacOS/"
+if pgrep -qf "$running"; then
   say "quitting the running KlikSnap"
-  osascript -e 'quit app "KlikSnap"' 2>/dev/null || pkill -x KlikSnap || true
-  for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -xq KlikSnap || break; sleep 0.5; done
+  osascript -e 'quit app "KlikSnap"' 2>/dev/null || pkill -f "$running" || true
+  for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -qf "$running" || break; sleep 0.5; done
 fi
 
 # /Applications is writable for admin users; fall back to sudo for the rest.
