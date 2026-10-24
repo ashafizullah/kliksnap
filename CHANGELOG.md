@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## Unreleased
+
+### Changed
+
+- App identifier changed from `com.kliksnap.app` to `com.ashafizullah.kliksnap`, matching the other Klik apps. Settings, capture history and editor preferences move over on first launch. On macOS, allow Screen Recording (and Accessibility, for auto-scroll) again when asked
+
 ## 0.14.2
 
 ### Fixed
