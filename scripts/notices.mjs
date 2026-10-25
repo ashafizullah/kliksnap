@@ -69,6 +69,8 @@ function licenseFiles(dir) {
 /** License text for a package; prefers the MIT file of dual-licensed packages. */
 function licenseText(dir, expr, name) {
   const files = licenseFiles(dir);
+  // "A AND B" (or "(MIT OR X) AND Y") applies every license, so ship all the files.
+  if (/\bAND\b/.test(expr) && files.length) return files.map((f) => readFileSync(join(dir, f), "utf8").trim()).join("\n\n");
   const mit = files.find((f) => /^licen[cs]e[-_.]?mit/i.test(f));
   const pick = /\bMIT\b/.test(expr) && mit ? [mit] : files.filter((f) => !/^licen[cs]e[-_.]?(apache|bsd|zlib|unlicense)/i.test(f) || files.length === 1);
   const chosen = pick.length ? pick : files;
@@ -192,10 +194,14 @@ for (const c of sortedCrates) {
   if (!c.license || !allowed(c.license)) problems.push(`crate ${c.name}@${c.version}: ${c.license || "no license field"}`);
   const text = c.text ?? fallbackText(c);
   const key = `${c.license}\n${text}`;
-  if (!groups.has(key)) groups.set(key, { license: c.license, text, names: [] });
-  groups.get(key).names.push(`${c.name} ${c.version}`);
+  if (!groups.has(key)) groups.set(key, { license: c.license, text, names: [], sources: new Set() });
+  const g = groups.get(key);
+  g.names.push(`${c.name} ${c.version}`);
+  if (c.repository) g.sources.add(c.repository);
 }
-const rustParts = [...groups.values()].map((g) => `### ${g.names.join(", ")} (${g.license})\n\n\`\`\`\n${g.text}\n\`\`\``);
+// MPL-2.0 (section 3.2) asks binaries to say where the source is; KlikSnap uses these crates unmodified.
+const sourceLine = (g) => (/^MPL-2\.0$/.test(g.license) && g.sources.size ? `Source code: ${[...g.sources].join(", ")}\n\n` : "");
+const rustParts = [...groups.values()].map((g) => `### ${g.names.join(", ")} (${g.license})\n\n${sourceLine(g)}\`\`\`\n${g.text}\n\`\`\``);
 
 if (problems.length) {
   console.error(`License check failed:\n  ${problems.join("\n  ")}`);

@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.7
+
+### Changed
+
+- Third-party notices now include every license and notice text for packages under more than one license, and a source link for the MPL-2.0 crates
+- The macOS DMG itself is now notarized and stapled, not only the app inside it
+
 ## 0.14.6
 
 ### New
