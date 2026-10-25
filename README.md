@@ -34,7 +34,7 @@
 - **Floating preview** after each capture: copy, save, pin, or open the editor
 - **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
 - **Scrolling capture**: select an area and KlikSnap scrolls it to the end by itself, then stitches one tall image (sticky headers kept once). On macOS auto-scroll needs Accessibility permission; without it, and on Linux, you scroll by hand
-- **Screen recording** to MP4 (area or full screen) with the OS's built-in hardware encoder, with the computer's sound and the microphone if you want them, the mouse pointer shown or hidden, clicks highlighted and your webcam in a bubble you can drag around (macOS and Windows)
+- **Screen recording** to MP4 (area or full screen) with the OS's built-in H.264 encoder, with the computer's sound and the microphone if you want them, the mouse pointer shown or hidden, clicks highlighted and your webcam in a bubble you can drag around (macOS and Windows)
 - **Record GIF**: an area straight to an animated GIF
 - **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
@@ -51,7 +51,9 @@
 - **English and Bahasa Indonesia**, following the system language or your choice in Settings
 - **Auto-update** from GitHub Releases (signed packages; checked daily, or via tray → *Check for Updates…*)
 
-The macOS app is about 4 MB per architecture (a 5 MB universal DMG) and uses about 15 MB of memory while idle.
+The macOS app is about 6 MB per architecture (a 7.5 MB universal DMG) and uses about 25 MB of memory while idle.
+
+**Privacy:** captures stay on your computer. KlikSnap only goes online to check GitHub for updates (can be turned off in Settings) and, when you use Ask AI or Copy Text with AI, to send the image to the model you set up. Your API key is kept in KlikSnap's settings file on your computer.
 
 ## Download
 
@@ -63,7 +65,7 @@ Get the latest version from **[Releases](https://github.com/ashafizullah/kliksna
 | Windows 10/11 (x64) | `KlikSnap_x.y.z_x64-setup.exe` or `.msi` |
 | Linux x86_64 (beta) | `KlikSnap_x.y.z_amd64.deb`, `KlikSnap-x.y.z-1.x86_64.rpm` or `KlikSnap_x.y.z_amd64.AppImage` |
 
-**macOS:** open the DMG and drag KlikSnap into Applications. KlikSnap is signed and notarized by Apple, so it opens without a Gatekeeper warning. Or use the install script, which downloads the latest DMG, copies KlikSnap into Applications and opens it (run it again later to reinstall; updates otherwise arrive in the app):
+**macOS:** open the DMG and drag KlikSnap into Applications. KlikSnap is signed with a Developer ID and notarized by Apple, so it opens without a Gatekeeper warning. Or use the install script, which downloads the latest DMG, copies KlikSnap into Applications and opens it (run it again later to reinstall; updates otherwise arrive in the app):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ashafizullah/kliksnap/main/install.sh | bash
@@ -73,7 +75,7 @@ Either way, allow **Screen Recording** when asked (System Settings → Privacy &
 
 **Windows:** SmartScreen may warn about an unsigned app. Click **More info → Run anyway**.
 
-**Linux (beta):** install the `.deb` (Ubuntu 24.04+, Debian 13+) or `.rpm` (Fedora), or `chmod +x` the AppImage and run it. Updating from inside the app is only sure to work for the AppImage; with the `.deb` or `.rpm`, install new versions from Releases. Install `tesseract-ocr` for Copy Text and `ffmpeg` for recording (the packages recommend both). What works depends on the session:
+**Linux (beta):** install the `.deb` (Ubuntu 24.04+, Debian 13+) or `.rpm` (Fedora), or `chmod +x` the AppImage and run it. Updating from inside the app is only sure to work for the AppImage; with the `.deb` or `.rpm`, install new versions from Releases. Install `tesseract-ocr` for Copy Text and `ffmpeg` for recording (the packages recommend both). KlikSnap runs them as separate programs and doesn't include them. What works depends on the session:
 
 - **X11:** everything except Share; recording uses ffmpeg, with sound from PulseAudio or PipeWire.
 - **Wayland** (the default on Ubuntu and Fedora): global shortcuts and recording don't work yet, and the selection overlay may misbehave. Add a shortcut in your desktop's keyboard settings that runs `kliksnap --capture area` (or `window`, `screen`, `text`, `scroll`). Logging in with an Xorg session gets you everything.
@@ -112,9 +114,9 @@ npm run tauri build    # bundle (.app/.dmg on macOS, .msi/.exe on Windows, .deb/
 
 On Linux, install the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/#linux) plus `libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl1-mesa-dev libgbm-dev clang` (PipeWire 1.0+, so Ubuntu 24.04 or later).
 
-CI runs type checks, `cargo fmt`, `clippy` and tests on macOS, Windows and Linux for every push and pull request. Pushing a `v*` tag builds the universal macOS DMG, the Windows installers and the Linux packages, signs the update packages and attaches everything (including `latest.json` for the in-app updater) to a draft GitHub release. Publish the draft to roll it out: installed apps only see published releases.
+CI runs type checks, `cargo fmt`, `clippy` and tests on macOS, Windows and Linux for every push and pull request, and checks that every bundled dependency has a permissive license listed in `THIRD_PARTY_NOTICES.md`. Pushing a `v*` tag builds the universal macOS DMG, the Windows installers and the Linux packages, signs and notarizes the macOS app, signs the update packages and attaches everything (including `latest.json` for the in-app updater) to a draft GitHub release. Publish the draft to roll it out: installed apps only see published releases.
 
-Releases need the `TAURI_SIGNING_PRIVATE_KEY` repository secret, plus `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID` to sign and notarize the macOS build. The matching public key is in `tauri.conf.json`. Bump `version` in `tauri.conf.json`, `Cargo.toml` and `package.json` before tagging.
+Releases need the `TAURI_SIGNING_PRIVATE_KEY` repository secret, plus `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific password) and `APPLE_TEAM_ID` to sign and notarize the macOS build. The matching public key is in `tauri.conf.json`. Before tagging, bump `version` in `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`, `package.json` and `package-lock.json`, and add a section for the version to `CHANGELOG.md` (it becomes the release notes; the release fails without it).
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
@@ -123,7 +125,7 @@ git tag v0.1.0 && git push origin v0.1.0
 ### How it stays light
 
 - Tauri 2 uses the system webview (WKWebView / WebView2), so no Chromium is bundled
-- Svelte 5 compiles away; the whole UI is ~75 KB of JS/CSS
+- Svelte 5 compiles away; the whole UI is ~70 KB of JS/CSS gzipped (the license list loads only when opened)
 - Windows are created on demand and destroyed when closed; idle KlikSnap is only a tray icon
 - Captures go to the webview through a custom `ks://` protocol as uncompressed BMP, so nothing is base64-encoded through JSON
 - OCR uses the OS engine instead of bundling Tesseract

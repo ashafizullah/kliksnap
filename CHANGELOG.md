@@ -3,6 +3,17 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.6
+
+### New
+
+- Third-party license notices, shown under Settings → General → Open-source licenses
+
+### Changed
+
+- The notices give the full license text for crates published without a license file (one, libwayshot-xcap, still links to its license)
+- The app's copyright line names Adam Suchi Hafizullah
+
 ## 0.14.5
 
 ### Fixed
