@@ -165,3 +165,5 @@ Issues and pull requests are welcome. `main` is protected: every change goes thr
 ## License
 
 [MIT](LICENSE)
+
+The app bundles third-party software (Tauri, Svelte and the Rust crates they and KlikSnap use). Their licenses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), which the app also shows under Settings → General → Open-source licenses. Run `npm run notices` after changing dependencies.

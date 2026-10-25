@@ -117,6 +117,21 @@
     }
   }
 
+  // Loaded on demand, so the license text isn't part of the Settings bundle.
+  let notices = $state<string | null>(null);
+  async function toggleLicenses() {
+    if (notices !== null) {
+      notices = null;
+      return;
+    }
+    notices = "…";
+    try {
+      notices = (await import("../THIRD_PARTY_NOTICES.md?raw")).default;
+    } catch {
+      notices = "https://github.com/ashafizullah/kliksnap/blob/main/THIRD_PARTY_NOTICES.md";
+    }
+  }
+
   let testing = $state(false);
   let aiStatus = $state<{ text: string; failed: boolean } | null>(null);
 
@@ -401,6 +416,15 @@
           </div>
           {#if updateStatus}
             <p class="hint" class:error={updateStatus.failed} role="status">{updateStatus.text}</p>
+          {/if}
+          <div class="row">
+            <span>{tr("Open-source licenses")}</span>
+            <button class="secondary" aria-expanded={notices !== null} onclick={toggleLicenses}>
+              {notices === null ? tr("Show") : tr("Hide")}
+            </button>
+          </div>
+          {#if notices !== null}
+            <pre class="notices">{notices}</pre>
           {/if}
         </section>
 
@@ -993,6 +1017,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  .notices {
+    margin: 4px 0 0;
+    max-height: 50vh;
+    overflow: auto;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
     -webkit-user-select: text;
     user-select: text;
   }
