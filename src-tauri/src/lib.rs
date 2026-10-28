@@ -1275,6 +1275,7 @@ pub fn run() {
             commands::update_info,
             commands::update_install,
             commands::update_notes,
+            commands::open_github,
             commands::app_version,
             commands::quit,
         ])
