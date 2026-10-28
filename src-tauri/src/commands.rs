@@ -123,6 +123,11 @@ pub fn update_notes() -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn open_github() -> Result<(), String> {
+    crate::updater::open_repo()
+}
+
+#[tauri::command]
 pub fn quit(app: AppHandle) {
     app.exit(0);
 }

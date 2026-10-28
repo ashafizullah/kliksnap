@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.14.8
+
+### Changed
+
+- Settings → General has a GitHub button, next to Open-source licenses, which now shows and hides the license text itself
+- In Indonesian, Open-source licenses now reads "Lisensi open source", as in the other Klik apps
+
 ## 0.14.7
 
 ### Changed
