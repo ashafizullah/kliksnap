@@ -295,6 +295,11 @@ const ID: Record<string, string> = {
   "Record microphone": "Rekam mikrofon",
   "Show mouse pointer": "Tampilkan kursor mouse",
   "Highlight mouse clicks": "Sorot klik mouse",
+  "Zoom in on the mouse": "Zoom ke arah mouse",
+  "Hold to zoom": "Tahan untuk zoom",
+  "Zoom level": "Tingkat zoom",
+  "While recording, hold {key} to zoom in where the mouse is; let go to zoom back out.":
+    "Saat merekam, tahan {key} untuk zoom ke posisi mouse; lepas untuk kembali.",
   "Show webcam": "Tampilkan webcam",
   "The webcam is recorded with the screen; drag it where you like.":
     "Webcam ikut terekam bersama layar; seret ke mana pun kamu mau.",

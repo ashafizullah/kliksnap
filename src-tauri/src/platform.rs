@@ -11,6 +11,13 @@ pub enum Sound {
     Pop,
 }
 
+/// Modifier keys, as `modifiers()` reports them.
+pub const MOD_CTRL: u8 = 1;
+pub const MOD_ALT: u8 = 2;
+pub const MOD_SHIFT: u8 = 4;
+/// Command on macOS, the Windows key on Windows.
+pub const MOD_META: u8 = 8;
+
 /// A single short pop. The macOS system Pop has a second one just after it.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 static POP_WAV: &[u8] = include_bytes!("../sounds/pop.wav");
@@ -60,6 +67,7 @@ mod imp {
         fn CGEventGetLocation(event: *const c_void) -> CGPoint;
         fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
         fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+        fn CGEventSourceFlagsState(state: i32) -> u64;
         fn CGWindowListCreateImage(
             rect: CGRect,
             option: u32,
@@ -198,6 +206,21 @@ mod imp {
             CGEventSourceButtonState(COMBINED_SESSION_STATE, 0)
                 || CGEventSourceButtonState(COMBINED_SESSION_STATE, 1)
         }
+    }
+
+    /// The modifier keys held down, as `MOD_*` bits.
+    pub fn modifiers() -> u8 {
+        const COMBINED_SESSION_STATE: i32 = 0;
+        let flags = unsafe { CGEventSourceFlagsState(COMBINED_SESSION_STATE) };
+        [
+            (1 << 18, super::MOD_CTRL),
+            (1 << 19, super::MOD_ALT),
+            (1 << 17, super::MOD_SHIFT),
+            (1 << 20, super::MOD_META),
+        ]
+        .iter()
+        .filter(|(flag, _)| flags & flag != 0)
+        .fold(0, |m, (_, bit)| m | bit)
     }
 
     pub fn has_screen_permission() -> bool {
@@ -548,6 +571,25 @@ mod imp {
         unsafe { GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0 }
     }
 
+    /// The modifier keys held down, as `MOD_*` bits.
+    pub fn modifiers() -> u8 {
+        const VK_SHIFT: i32 = 0x10;
+        const VK_CONTROL: i32 = 0x11;
+        const VK_MENU: i32 = 0x12;
+        const VK_LWIN: i32 = 0x5B;
+        const VK_RWIN: i32 = 0x5C;
+        let down = |key: i32| unsafe { GetAsyncKeyState(key) < 0 };
+        [
+            (down(VK_CONTROL), super::MOD_CTRL),
+            (down(VK_MENU), super::MOD_ALT),
+            (down(VK_SHIFT), super::MOD_SHIFT),
+            (down(VK_LWIN) || down(VK_RWIN), super::MOD_META),
+        ]
+        .iter()
+        .filter(|(held, _)| *held)
+        .fold(0, |m, (_, bit)| m | bit)
+    }
+
     /// Windows records every window; there is no number to name one by.
     pub fn window_number(_win: &WebviewWindow) -> u32 {
         0
@@ -724,6 +766,9 @@ mod imp {
     }
     pub fn mouse_down() -> bool {
         false
+    }
+    pub fn modifiers() -> u8 {
+        0
     }
     pub fn has_screen_permission() -> bool {
         true

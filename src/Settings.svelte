@@ -30,6 +30,9 @@
     record_mic: boolean;
     record_cursor: boolean;
     record_clicks: boolean;
+    record_zoom: boolean;
+    zoom_key: "ctrl" | "alt" | "shift" | "meta";
+    zoom_level: number;
     record_camera: boolean;
     camera_size: number;
     camera_shape: "circle" | "rounded" | "square";
@@ -57,6 +60,14 @@
   type AiAction = { name: string; prompt: string };
   type AiProfile = { name: string; base_url: string; api_key: string; model: string };
   type HotkeyField = "hotkey_area" | "hotkey_window" | "hotkey_screen" | "hotkey_text" | "hotkey_last_area" | "hotkey_record" | "hotkey_scroll";
+
+  const ZOOM_KEYS = ["ctrl", "alt", "shift", "meta"] as const;
+
+  function zoomKeyLabel(key: (typeof ZOOM_KEYS)[number]) {
+    const mac = { ctrl: "Control", alt: "Option", shift: "Shift", meta: "Command" };
+    const pc = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", meta: "Windows" };
+    return (isMac ? mac : pc)[key];
+  }
 
   const HOTKEYS: { field: HotkeyField; label: string }[] = [
     { field: "hotkey_area", label: "Capture area" },
@@ -258,7 +269,7 @@
   }
 
   /** Puts a slider back to its default (the one in settings.rs). */
-  function reset(key: "jpg_quality" | "camera_size" | "camera_border_width", value: number) {
+  function reset(key: "jpg_quality" | "camera_size" | "camera_border_width" | "zoom_level", value: number) {
     if (!s || s[key] === value) return;
     s[key] = value;
     save();
@@ -607,6 +618,30 @@
               <span>{tr("Highlight mouse clicks")}</span>
               <input type="checkbox" bind:checked={s.record_clicks} onchange={save} />
             </label>
+            <label class="row">
+              <span>{tr("Zoom in on the mouse")}</span>
+              <input type="checkbox" bind:checked={s.record_zoom} onchange={save} />
+            </label>
+            {#if s.record_zoom}
+              <label class="row">
+                <span>{tr("Hold to zoom")}</span>
+                <select bind:value={s.zoom_key} onchange={save}>
+                  {#each ZOOM_KEYS as k (k)}
+                    <option value={k}>{zoomKeyLabel(k)}</option>
+                  {/each}
+                </select>
+              </label>
+              <label class="row">
+                <span>{tr("Zoom level")}</span>
+                <span class="range">
+                  <input type="range" min="125" max="400" step="25" bind:value={s.zoom_level} onchange={save} ondblclick={() => reset("zoom_level", 200)} title={tr("Double-click to reset")} />
+                  <span class="value">{s.zoom_level / 100}×</span>
+                </span>
+              </label>
+              <p class="hint">
+                {tr("While recording, hold {key} to zoom in where the mouse is; let go to zoom back out.", { key: zoomKeyLabel(s.zoom_key) })}
+              </p>
+            {/if}
           {/if}
         </section>
 
