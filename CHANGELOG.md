@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.15.0
+
+### Added
+
+- Zoom while recording: hold a key (Control by default) to zoom in on the mouse, and let go to zoom back out. Turn it on in Settings → Recording, where you pick the key and how far it zooms (macOS and Windows)
+
 ## 0.14.8
 
 ### Changed

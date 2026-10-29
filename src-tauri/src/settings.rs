@@ -52,6 +52,12 @@ pub struct Settings {
     pub record_cursor: bool,
     /// Recordings show a ripple where the mouse is clicked (not on Linux).
     pub record_clicks: bool,
+    /// Holding `zoom_key` zooms recordings in on the mouse (not on Linux).
+    pub record_zoom: bool,
+    /// "ctrl", "alt", "shift" or "meta" (Command, or the Windows key).
+    pub zoom_key: String,
+    /// How far the zoom goes, in percent.
+    pub zoom_level: u32,
     /// Recordings show the webcam in a round bubble (not on Linux).
     pub record_camera: bool,
     /// The webcam's width and height, in logical pixels.
@@ -129,6 +135,9 @@ impl Default for Settings {
             record_mic: false,
             record_cursor: true,
             record_clicks: false,
+            record_zoom: false,
+            zoom_key: "ctrl".into(),
+            zoom_level: 200,
             record_camera: false,
             camera_size: 180,
             camera_shape: "circle".into(),
@@ -194,6 +203,12 @@ impl Settings {
             self.camera_shape = "circle".into();
         }
         self.camera_border_width = self.camera_border_width.clamp(1, 16);
+        if crate::zoom::key_mask(&self.zoom_key).is_none() {
+            self.zoom_key = "ctrl".into();
+        }
+        self.zoom_level = self
+            .zoom_level
+            .clamp(crate::zoom::MIN_LEVEL, crate::zoom::MAX_LEVEL);
         let corners = [
             "bottom-left",
             "bottom-right",

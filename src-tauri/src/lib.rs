@@ -17,6 +17,7 @@ mod stitch;
 mod tray;
 mod ui;
 mod updater;
+mod zoom;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -78,6 +79,7 @@ struct Recording {
     bounds: Bounds,
     /// Where the webcam could go, to remember where it was left.
     camera: Option<ui::CameraLayout>,
+    zoom: Option<Arc<zoom::Zoom>>,
 }
 
 /// The OCR result notice. An empty `text` means nothing was copied.
@@ -482,6 +484,9 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
         .filter(|w| w.is_visible().unwrap_or(false))
         .map(platform::window_number)
         .collect();
+    let zoom = crate::zoom::key_mask(&settings.zoom_key)
+        .filter(|_| settings.record_zoom && supported)
+        .map(|mask| crate::zoom::start(bounds, rect, mask, settings.zoom_level));
     let dir = settings.save_dir(app);
     let ext = if gif { "gif" } else { "mp4" };
     let path = output::unique_path(&dir, &settings.recording_name(ext));
@@ -500,11 +505,15 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 audio,
                 settings.record_cursor,
                 &keep,
+                zoom.clone(),
             )
         });
     if started.is_err() {
         for win in [&clicks, &camera].into_iter().flatten() {
             let _ = win.destroy();
+        }
+        if let Some(z) = &zoom {
+            z.stop();
         }
     }
     match started {
@@ -514,6 +523,7 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
                 path: path.clone(),
                 bounds,
                 camera: layout,
+                zoom,
             });
             if clicks.is_some() {
                 track_clicks(app.clone(), bounds, path.clone());
@@ -764,6 +774,9 @@ pub fn stop_recording(app: &AppHandle) {
         return;
     };
     remember_camera(app, &rec);
+    if let Some(z) = &rec.zoom {
+        z.stop();
+    }
     for label in ["recording", "clicks", "camera"] {
         if let Some(win) = app.get_webview_window(label) {
             let _ = win.destroy();

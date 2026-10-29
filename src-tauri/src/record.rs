@@ -6,8 +6,10 @@
 //! which can grab X11 but not yet Wayland.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::capture::Bounds;
+use crate::zoom::Zoom;
 
 pub use imp::Recorder;
 
@@ -39,8 +41,10 @@ pub enum SoundWarning {
 /// or a GIF if the path ends in `.gif`, at `percent` of the screen's
 /// resolution, with the mouse pointer drawn in if `cursor`. KlikSnap's own
 /// windows are left out, except those in `keep` (macOS window numbers;
-/// Windows and Linux record every window anyway). Sound that can't be
-/// captured is left out rather than failing the recording; the warning says so.
+/// Windows and Linux record every window anyway). Frames follow `zoom`'s
+/// view (not on Linux). Sound that can't be captured is left out rather
+/// than failing the recording; the warning says so.
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     b: &Bounds,
     rect: [f64; 4],
@@ -49,6 +53,7 @@ pub fn start(
     audio: Audio,
     cursor: bool,
     keep: &[u32],
+    zoom: Option<Arc<Zoom>>,
 ) -> Result<(Recorder, Option<SoundWarning>), String> {
     let mut r = region(b, rect, percent);
     let audio = if is_gif(path) {
@@ -65,19 +70,20 @@ pub fn start(
         audio.mic = false;
         warning = Some(SoundWarning::MicDenied);
     }
-    match imp::Recorder::start(b, r, path, audio, cursor, keep) {
+    match imp::Recorder::start(b, r, path, audio, cursor, keep, zoom.clone()) {
         Ok(rec) => Ok((rec, warning)),
         Err(e) if e != DECLINED && (audio.system || audio.mic) => {
             eprintln!("recording with sound: {e}");
             let _ = std::fs::remove_file(path);
-            let rec = imp::Recorder::start(b, r, path, Audio::default(), cursor, keep)?;
+            let rec =
+                imp::Recorder::start(b, r, path, Audio::default(), cursor, keep, zoom.clone())?;
             Ok((rec, Some(warning.unwrap_or(SoundWarning::NoSound))))
         }
         // macOS also declines the whole stream when only the microphone is
         // refused: try once more without sound before blaming the screen.
         Err(e) if audio.system || audio.mic => {
             let _ = std::fs::remove_file(path);
-            match imp::Recorder::start(b, r, path, Audio::default(), cursor, keep) {
+            match imp::Recorder::start(b, r, path, Audio::default(), cursor, keep, zoom.clone()) {
                 Ok(rec) => {
                     let w = if audio.mic {
                         SoundWarning::MicDenied
@@ -138,10 +144,17 @@ pub fn region(b: &Bounds, [fx, fy, fw, fh]: [f64; 4], percent: u32) -> Region {
     }
 }
 
-/// Scales tightly packed BGRA `src` (`sw`×`sh`) to `dw`×`dh` with bilinear
-/// filtering, bottom row first as the Windows encoder wants it.
+/// Scales BGRA `src` (`sw`×`sh`, `stride` bytes per row) to `dw`×`dh` with
+/// bilinear filtering, bottom row first as the Windows encoder wants it.
 #[cfg(any(target_os = "windows", test))]
-pub fn resample_flipped(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+pub fn resample_flipped(
+    src: &[u8],
+    stride: usize,
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<u8> {
     let mut out = vec![0u8; dw * dh * 4];
     if sw == 0 || sh == 0 {
         return out;
@@ -161,7 +174,7 @@ pub fn resample_flipped(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) 
         let y0 = ((fy >> 16) as usize).min(sh - 1);
         let y1 = (y0 + 1).min(sh - 1);
         let wy = (fy & 0xffff) as u32;
-        let (r0, r1) = (&src[y0 * sw * 4..][..sw * 4], &src[y1 * sw * 4..][..sw * 4]);
+        let (r0, r1) = (&src[y0 * stride..][..sw * 4], &src[y1 * stride..][..sw * 4]);
         let dst = &mut out[(dh - 1 - y) * dw * 4..][..dw * 4];
         for (x, &(a, b, wx)) in cols.iter().enumerate() {
             for c in 0..4 {
@@ -178,10 +191,12 @@ pub fn resample_flipped(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) 
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use std::ffi::c_void;
     use std::path::Path;
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     use block2::RcBlock;
@@ -190,12 +205,18 @@ mod imp {
     use objc2::runtime::{AnyObject, Bool, ProtocolObject, Sel};
     use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass};
     use objc2_av_foundation::{
-        AVAssetWriter, AVAssetWriterInput, AVAssetWriterStatus, AVFileTypeMPEG4, AVMediaTypeAudio,
-        AVMediaTypeVideo, AVVideoCodecKey, AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
+        AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
+        AVAssetWriterStatus, AVFileTypeMPEG4, AVMediaTypeAudio, AVMediaTypeVideo, AVVideoCodecKey,
+        AVVideoCodecTypeH264, AVVideoHeightKey, AVVideoWidthKey,
     };
     use objc2_core_foundation::CFRetained;
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_core_media::{kCMTimeInvalid, CMClock, CMSampleBuffer, CMSampleTimingInfo, CMTime};
+    use objc2_core_media::{CMClock, CMSampleBuffer, CMTime};
+    use objc2_core_video::{
+        CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+        CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+        CVPixelBufferLockFlags, CVPixelBufferPool, CVPixelBufferUnlockBaseAddress,
+    };
     use objc2_foundation::{
         NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString, NSURL,
     };
@@ -207,23 +228,40 @@ mod imp {
     use super::{Region, FPS};
     use crate::capture::Bounds;
     use crate::gif_writer::GifWriter;
+    use crate::zoom::{View, Zoom};
 
     const WAIT: Duration = Duration::from_secs(10);
 
     pub enum Writer {
         Mp4(Mp4),
-        Gif(std::sync::Mutex<Option<GifWriter>>),
+        Gif(Mutex<Option<GifWriter>>),
     }
 
     pub struct Mp4 {
         writer: Retained<AVAssetWriter>,
         input: Retained<AVAssetWriterInput>,
+        /// Takes the frames: the captured ones, and zoomed ones from its pool.
+        adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
         /// One audio track each, for the system's sound and the microphone.
         system: Option<Retained<AVAssetWriterInput>>,
         mic: Option<Retained<AVAssetWriterInput>>,
         started: AtomicBool,
         /// The newest frame, appended again when recording stops.
-        last: std::sync::Mutex<Option<CFRetained<CMSampleBuffer>>>,
+        last: Mutex<Option<CFRetained<CVPixelBuffer>>>,
+    }
+
+    pub struct Ivars {
+        writer: Writer,
+        zoom: Option<Arc<Zoom>>,
+        frames: Mutex<Frames>,
+    }
+
+    struct Frames {
+        /// The newest frame captured, zoomed again while the screen is still.
+        source: Option<CFRetained<CVPixelBuffer>>,
+        /// When the newest frame was written, and with which view.
+        written: Option<Duration>,
+        shown: View,
     }
 
     fn seconds(t: CMTime) -> Duration {
@@ -233,34 +271,196 @@ mod imp {
         Duration::from_secs_f64(t.value as f64 / t.timescale as f64)
     }
 
-    /// Hands the frame's pixels to the GIF writer.
-    unsafe fn push_gif(gif: &std::sync::Mutex<Option<GifWriter>>, buffer: &CMSampleBuffer) {
-        use objc2_core_video::{
-            CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight,
-            CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
-        };
+    /// Runs `f` on the frame's pixels: base address, bytes per row, width
+    /// and height.
+    unsafe fn with_pixels<R>(
+        image: &CVPixelBuffer,
+        flags: CVPixelBufferLockFlags,
+        f: impl FnOnce(*mut u8, usize, usize, usize) -> R,
+    ) -> Option<R> {
         unsafe {
-            let Some(image) = buffer.image_buffer() else {
-                return;
-            };
-            if CVPixelBufferLockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly) != 0 {
+            if CVPixelBufferLockBaseAddress(image, flags) != 0 {
+                return None;
+            }
+            let base = CVPixelBufferGetBaseAddress(image) as *mut u8;
+            let r = (!base.is_null()).then(|| {
+                f(
+                    base,
+                    CVPixelBufferGetBytesPerRow(image),
+                    CVPixelBufferGetWidth(image),
+                    CVPixelBufferGetHeight(image),
+                )
+            });
+            CVPixelBufferUnlockBaseAddress(image, flags);
+            r
+        }
+    }
+
+    #[repr(C)]
+    struct VImageBuffer {
+        data: *mut c_void,
+        height: usize,
+        width: usize,
+        row_bytes: usize,
+    }
+
+    #[link(name = "Accelerate", kind = "framework")]
+    extern "C" {
+        fn vImageScale_ARGB8888(
+            src: *const VImageBuffer,
+            dest: *const VImageBuffer,
+            temp: *mut c_void,
+            flags: u32,
+        ) -> isize;
+    }
+
+    /// Scales the part of `src` that `view` shows to fill `dw`×`dh` BGRA
+    /// pixels at `dst`.
+    unsafe fn zoom_into(
+        src: &CVPixelBuffer,
+        view: View,
+        dst: *mut u8,
+        dst_stride: usize,
+        dw: usize,
+        dh: usize,
+    ) -> bool {
+        unsafe {
+            with_pixels(
+                src,
+                CVPixelBufferLockFlags::ReadOnly,
+                |base, stride, w, h| {
+                    let (x, y, cw, ch) = view.crop(w, h);
+                    let from = VImageBuffer {
+                        data: base.add(y * stride + x * 4) as *mut c_void,
+                        height: ch,
+                        width: cw,
+                        row_bytes: stride,
+                    };
+                    let to = VImageBuffer {
+                        data: dst as *mut c_void,
+                        height: dh,
+                        width: dw,
+                        row_bytes: dst_stride,
+                    };
+                    vImageScale_ARGB8888(&from, &to, std::ptr::null_mut(), 0) == 0
+                },
+            )
+            .unwrap_or(false)
+        }
+    }
+
+    /// The part of `src` that `view` shows, as a full-size frame from `pool`.
+    unsafe fn zoomed(
+        src: &CVPixelBuffer,
+        view: View,
+        pool: &CVPixelBufferPool,
+    ) -> Option<CFRetained<CVPixelBuffer>> {
+        unsafe {
+            let mut out: *mut CVPixelBuffer = std::ptr::null_mut();
+            if CVPixelBufferPool::create_pixel_buffer(None, pool, NonNull::from(&mut out)) != 0 {
+                return None;
+            }
+            let out = CFRetained::from_raw(NonNull::new(out)?);
+            let ok = with_pixels(
+                &out,
+                CVPixelBufferLockFlags::empty(),
+                |base, stride, w, h| zoom_into(src, view, base, stride, w, h),
+            )?;
+            // The color space, so zoomed frames match the others.
+            src.propagate_attachments(&out);
+            ok.then_some(out)
+        }
+    }
+
+    /// Hands the frame's pixels to the GIF writer.
+    unsafe fn push_gif(
+        gif: &Mutex<Option<GifWriter>>,
+        image: &CVPixelBuffer,
+        view: View,
+        t: Duration,
+    ) {
+        let mut gif = gif.lock().unwrap();
+        let Some(g) = gif.as_mut() else { return };
+        unsafe {
+            with_pixels(
+                image,
+                CVPixelBufferLockFlags::ReadOnly,
+                |base, stride, w, h| {
+                    if view.is_full() {
+                        g.push(
+                            std::slice::from_raw_parts(base, stride * h),
+                            stride,
+                            false,
+                            t,
+                        );
+                        return;
+                    }
+                    let mut px = vec![0u8; w * h * 4];
+                    if zoom_into(image, view, px.as_mut_ptr(), w * 4, w, h) {
+                        g.push(&px, w * 4, false, t);
+                    }
+                },
+            );
+        }
+    }
+
+    impl Ivars {
+        /// Writes a frame taken at `t`, zoomed to the view.
+        unsafe fn write(&self, image: &CVPixelBuffer, t: CMTime, frames: &mut Frames) {
+            let view = self.zoom.as_ref().map_or(View::FULL, |z| z.view());
+            let at = seconds(t);
+            // A frame older than the last one written fails the whole file.
+            if frames.written.is_some_and(|w| at <= w) {
                 return;
             }
-            let base = CVPixelBufferGetBaseAddress(&image);
-            let stride = CVPixelBufferGetBytesPerRow(&image);
-            let h = CVPixelBufferGetHeight(&image);
-            if !base.is_null() {
-                let pixels = std::slice::from_raw_parts(base as *const u8, stride * h);
-                if let Some(g) = gif.lock().unwrap().as_mut() {
-                    g.push(
-                        pixels,
-                        stride,
-                        false,
-                        seconds(buffer.presentation_time_stamp()),
-                    );
+            frames.written = Some(at);
+            frames.shown = view;
+            let w = match &self.writer {
+                Writer::Mp4(w) => w,
+                Writer::Gif(g) => return unsafe { push_gif(g, image, view, at) },
+            };
+            unsafe {
+                let zoomed = match view.is_full() {
+                    true => None,
+                    false => match w.adaptor.pixelBufferPool() {
+                        Some(pool) => match zoomed(image, view, &pool) {
+                            Some(z) => Some(z),
+                            None => return,
+                        },
+                        None => return,
+                    },
+                };
+                let frame = zoomed.as_deref().unwrap_or(image);
+                if !w.started.swap(true, Ordering::SeqCst) {
+                    w.writer.startSessionAtSourceTime(t);
+                }
+                if w.input.isReadyForMoreMediaData()
+                    && w.adaptor.appendPixelBuffer_withPresentationTime(frame, t)
+                {
+                    *w.last.lock().unwrap() = Some(CFRetained::retain(NonNull::from(frame)));
                 }
             }
-            CVPixelBufferUnlockBaseAddress(&image, CVPixelBufferLockFlags::ReadOnly);
+        }
+
+        /// While zoomed, writes the newest frame again if the screen hasn't
+        /// sent one lately, so the zoom moves on a still screen too.
+        unsafe fn tick(&self) {
+            let Some(zoom) = &self.zoom else { return };
+            let mut frames = self.frames.lock().unwrap();
+            if zoom.view().is_full() && frames.shown.is_full() {
+                return;
+            }
+            let now = CMClock::host_time_clock().time();
+            let due = Duration::from_millis(800 / FPS as u64);
+            if frames
+                .written
+                .is_some_and(|w| seconds(now).saturating_sub(w) < due)
+            {
+                return;
+            }
+            if let Some(source) = frames.source.clone() {
+                unsafe { self.write(&source, now, &mut frames) };
+            }
         }
     }
 
@@ -268,7 +468,7 @@ mod imp {
         // Receives the frames on the recording's serial queue.
         #[unsafe(super(NSObject))]
         #[name = "KlikSnapRecordOutput"]
-        #[ivars = Writer]
+        #[ivars = Ivars]
         struct Output;
 
         unsafe impl NSObjectProtocol for Output {}
@@ -282,7 +482,7 @@ mod imp {
                 kind: SCStreamOutputType,
             ) {
                 if kind != SCStreamOutputType::Screen {
-                    if let Writer::Mp4(w) = self.ivars() {
+                    if let Writer::Mp4(w) = &self.ivars().writer {
                         let input = if kind == SCStreamOutputType::Audio {
                             w.system.as_ref()
                         } else if kind == SCStreamOutputType::Microphone {
@@ -303,19 +503,17 @@ mod imp {
                 }
                 unsafe {
                     // Frames where nothing changed carry no image.
-                    if !buffer.is_valid() || buffer.image_buffer().is_none() {
+                    if !buffer.is_valid() {
                         return;
                     }
-                    let w = match self.ivars() {
-                        Writer::Mp4(w) => w,
-                        Writer::Gif(g) => return push_gif(g, buffer),
+                    let Some(image) = buffer.image_buffer() else {
+                        return;
                     };
-                    if !w.started.swap(true, Ordering::SeqCst) {
-                        w.writer
-                            .startSessionAtSourceTime(buffer.presentation_time_stamp());
-                    }
-                    if w.input.isReadyForMoreMediaData() && w.input.appendSampleBuffer(buffer) {
-                        *w.last.lock().unwrap() = Some(CFRetained::retain(NonNull::from(buffer)));
+                    let ivars = self.ivars();
+                    let mut frames = ivars.frames.lock().unwrap();
+                    ivars.write(&image, buffer.presentation_time_stamp(), &mut frames);
+                    if ivars.zoom.is_some() {
+                        frames.source = Some(image);
                     }
                 }
             }
@@ -326,6 +524,8 @@ mod imp {
         stream: Retained<SCStream>,
         output: Retained<Output>,
         queue: dispatch2::DispatchRetained<DispatchQueue>,
+        /// Keeps the zoom moving on a still screen, and its stop flag.
+        ticker: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
     }
 
     // The stream and writer are only touched on their queue or after the
@@ -387,6 +587,7 @@ mod imp {
             audio: super::Audio,
             cursor: bool,
             keep: &[u32],
+            zoom: Option<Arc<Zoom>>,
         ) -> Result<Self, String> {
             let content = shareable_content()?;
             let display = unsafe { content.displays() }
@@ -447,13 +648,20 @@ mod imp {
             }
 
             let writer = if super::is_gif(path) {
-                Writer::Gif(std::sync::Mutex::new(Some(GifWriter::new(
-                    path, r.px_w, r.px_h,
-                )?)))
+                Writer::Gif(Mutex::new(Some(GifWriter::new(path, r.px_w, r.px_h)?)))
             } else {
                 Writer::Mp4(new_writer(path, r, audio)?)
             };
-            let output = Output::alloc().set_ivars(writer);
+            let ticks = zoom.is_some();
+            let output = Output::alloc().set_ivars(Ivars {
+                writer,
+                zoom,
+                frames: Mutex::new(Frames {
+                    source: None,
+                    written: None,
+                    shown: View::FULL,
+                }),
+            });
             let output: Retained<Output> = unsafe { msg_send![super(output), init] };
             let queue = DispatchQueue::new("app.kliksnap.record", None);
             let stream = unsafe {
@@ -492,15 +700,38 @@ mod imp {
             {
                 return Err(e);
             }
+            let ticker = ticks.then(|| {
+                let stop = Arc::new(AtomicBool::new(false));
+                let (flag, output, queue) = (
+                    stop.clone(),
+                    AnyThread(output.clone()),
+                    AnyThread(queue.clone()),
+                );
+                let thread = std::thread::spawn(move || {
+                    while !flag.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1000 / FPS as u64));
+                        let output = AnyThread(output.get().clone());
+                        queue
+                            .get()
+                            .exec_async(move || unsafe { output.get().ivars().tick() });
+                    }
+                });
+                (thread, stop)
+            });
             Ok(Self {
                 stream,
                 output,
                 queue,
+                ticker,
             })
         }
 
         /// Stops recording and finishes the file.
         pub fn stop(self) -> Result<(), String> {
+            if let Some((thread, stop)) = self.ticker {
+                stop.store(true, Ordering::SeqCst);
+                let _ = thread.join();
+            }
             let (tx, rx) = mpsc::channel();
             let done = RcBlock::new(move |e: *mut NSError| {
                 let _ = tx.send(ns_error(e));
@@ -513,7 +744,7 @@ mod imp {
             let (tx, rx) = mpsc::channel();
             let output = AnyThread(self.output.clone());
             self.queue.exec_async(move || {
-                let w = output.get().ivars();
+                let w = &output.get().ivars().writer;
                 let _ = tx.send(unsafe { finish(w) });
             });
             rx.recv_timeout(WAIT)
@@ -543,26 +774,8 @@ mod imp {
             // at the stop time, or a still ending would be cut off.
             let end = CMClock::host_time_clock().time();
             if let Some(last) = w.last.lock().unwrap().take() {
-                let timing = CMSampleTimingInfo {
-                    duration: kCMTimeInvalid,
-                    presentationTimeStamp: end,
-                    decodeTimeStamp: kCMTimeInvalid,
-                };
-                let mut copy: *mut CMSampleBuffer = std::ptr::null_mut();
-                let status = CMSampleBuffer::create_copy_with_new_timing(
-                    None,
-                    &last,
-                    1,
-                    &timing,
-                    NonNull::from(&mut copy),
-                );
-                if status == 0 {
-                    if let Some(copy) = NonNull::new(copy) {
-                        let copy = CFRetained::from_raw(copy);
-                        if w.input.isReadyForMoreMediaData() {
-                            w.input.appendSampleBuffer(&copy);
-                        }
-                    }
+                if w.input.isReadyForMoreMediaData() {
+                    w.adaptor.appendPixelBuffer_withPresentationTime(&last, end);
                 }
             }
             w.input.markAsFinished();
@@ -650,6 +863,22 @@ mod imp {
             );
             input.setExpectsMediaDataInRealTime(true);
             writer.addInput(&input);
+            let keys = [
+                NSString::from_str("PixelFormatType"),
+                NSString::from_str("Width"),
+                NSString::from_str("Height"),
+            ];
+            let values = [
+                NSNumber::new_u32(u32::from_be_bytes(*b"BGRA")),
+                NSNumber::new_u32(r.px_w),
+                NSNumber::new_u32(r.px_h),
+            ];
+            let keys: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
+            let values: Vec<&AnyObject> = values.iter().map(|v| &***v as &AnyObject).collect();
+            let adaptor = AVAssetWriterInputPixelBufferAdaptor::assetWriterInputPixelBufferAdaptorWithAssetWriterInput_sourcePixelBufferAttributes(
+                &input,
+                Some(&NSDictionary::from_slices(&keys, &values)),
+            );
             let system = audio.system.then(|| audio_input(2)).transpose()?;
             let mic = audio.mic.then(|| audio_input(1)).transpose()?;
             for a in [&system, &mic].into_iter().flatten() {
@@ -668,10 +897,11 @@ mod imp {
             Ok(Mp4 {
                 writer,
                 input,
+                adaptor,
                 system,
                 mic,
                 started: AtomicBool::new(false),
-                last: std::sync::Mutex::new(None),
+                last: Mutex::new(None),
             })
         }
     }
@@ -680,6 +910,9 @@ mod imp {
 #[cfg(target_os = "windows")]
 mod imp {
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     use windows::Win32::Foundation::POINT;
@@ -701,6 +934,7 @@ mod imp {
     use super::{Region, FPS};
     use crate::capture::Bounds;
     use crate::gif_writer::GifWriter;
+    use crate::zoom::{View, Zoom};
 
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
@@ -711,22 +945,96 @@ mod imp {
         scratch: Vec<u8>,
         /// The newest frame (bottom-up rows), sent again when recording stops.
         last: Option<Vec<u8>>,
+        zoom: Option<Arc<Zoom>>,
+        /// The newest region captured (top-down rows), its width and height,
+        /// zoomed again while the screen is still.
+        source: Option<(Vec<u8>, usize, usize)>,
+        /// When the newest frame was written (100 ns units), and with which view.
+        written: Option<i64>,
+        shown: View,
+    }
+
+    impl Handler {
+        fn new_with(region: Region, zoom: Option<Arc<Zoom>>) -> Self {
+            Self {
+                region,
+                encoder: None,
+                gif: None,
+                scratch: Vec::new(),
+                last: None,
+                zoom,
+                source: None,
+                written: None,
+                shown: View::FULL,
+            }
+        }
+
+        /// Writes the region's `sw`×`sh` pixels taken at `t`, zoomed to the view.
+        fn write(&mut self, pixels: &[u8], sw: usize, sh: usize, t: i64) -> Result<(), Error> {
+            let r = self.region;
+            let view = self.zoom.as_ref().map_or(View::FULL, |z| z.view());
+            // A frame older than the last one written would fail the file.
+            if self.written.is_some_and(|w| t <= w) {
+                return Ok(());
+            }
+            self.written = Some(t);
+            self.shown = view;
+            let (dw, dh) = (r.px_w as usize, r.px_h as usize);
+            let stride = sw * 4;
+            // The encoder wants the exact output size, bottom row first.
+            let flipped = if view.is_full() && !r.scaled {
+                let mut flipped = vec![0u8; dw * 4 * dh];
+                let n = stride.min(dw * 4);
+                for (i, line) in pixels.chunks_exact(stride).take(dh).enumerate() {
+                    let dst = (dh - 1 - i) * dw * 4;
+                    flipped[dst..dst + n].copy_from_slice(&line[..n]);
+                }
+                flipped
+            } else {
+                let (x, y, cw, ch) = view.crop(sw, sh);
+                super::resample_flipped(&pixels[y * stride + x * 4..], stride, cw, ch, dw, dh)
+            };
+            if let Some(encoder) = self.encoder.as_mut() {
+                encoder.send_frame_buffer(&flipped, t)?;
+            }
+            if let Some(gif) = self.gif.as_mut() {
+                let t = Duration::from_nanos(t.max(0) as u64 * 100);
+                gif.push(&flipped, dw * 4, true, t);
+                return Ok(());
+            }
+            self.last = Some(flipped);
+            Ok(())
+        }
+
+        /// While zoomed, writes the newest frame again if the screen hasn't
+        /// sent one lately, so the zoom moves on a still screen too.
+        fn tick(&mut self) {
+            let Some(zoom) = &self.zoom else { return };
+            if zoom.view().is_full() && self.shown.is_full() {
+                return;
+            }
+            let t = now();
+            if self.written.is_some_and(|w| t - w < 8_000_000 / FPS as i64) {
+                return;
+            }
+            if let Some((px, w, h)) = self.source.take() {
+                let _ = self.write(&px, w, h, t);
+                self.source = Some((px, w, h));
+            }
+        }
     }
 
     impl GraphicsCaptureApiHandler for Handler {
-        /// The region, the file, and whether it gets a sound track.
-        type Flags = (Region, PathBuf, bool);
+        /// The region, the file, whether it gets a sound track, and the zoom.
+        type Flags = (Region, PathBuf, bool, Option<Arc<Zoom>>);
         type Error = Error;
 
         fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-            let (region, path, sound) = ctx.flags;
+            let (region, path, sound, zoom) = ctx.flags;
             if super::is_gif(&path) {
                 return Ok(Self {
-                    region,
-                    encoder: None,
                     gif: Some(GifWriter::new(&path, region.px_w, region.px_h)?),
-                    scratch: Vec::new(),
-                    last: None,
+                    ..Self::new_with(region, zoom)
                 });
             }
             let bitrate = (region.px_w * region.px_h * 4).clamp(2_000_000, 15_000_000);
@@ -741,11 +1049,8 @@ mod imp {
                 &path,
             )?;
             Ok(Self {
-                region,
                 encoder: Some(encoder),
-                gif: None,
-                scratch: Vec::new(),
-                last: None,
+                ..Self::new_with(region, zoom)
             })
         }
 
@@ -757,45 +1062,35 @@ mod imp {
             let r = self.region;
             let timestamp = frame.timestamp()?.Duration;
             let (x, y) = (r.x as u32, r.y as u32);
-            // At full size, crop to the (even) output size; scaled, take the
-            // whole region and resample it.
-            let (cw, ch) = if r.scaled {
+            // At full size, crop to the (even) output size; scaled or zoomed,
+            // take the whole region and resample it.
+            let (cw, ch) = if r.scaled || self.zoom.is_some() {
                 (r.w as u32, r.h as u32)
             } else {
                 (r.px_w, r.px_h)
             };
             let (x1, y1) = ((x + cw).min(frame.width()), (y + ch).min(frame.height()));
             let buffer = frame.buffer_crop(x, y, x1, y1)?;
-            let pixels = buffer.as_nopadding_buffer(&mut self.scratch);
+            let mut scratch = std::mem::take(&mut self.scratch);
+            let pixels = buffer.as_nopadding_buffer(&mut scratch);
             let (sw, sh) = ((x1 - x) as usize, (y1 - y) as usize);
-            // The encoder wants the exact output size, bottom row first.
-            let flipped = if r.scaled {
-                super::resample_flipped(pixels, sw, sh, r.px_w as usize, r.px_h as usize)
-            } else {
-                let out_row = r.px_w as usize * 4;
-                let mut flipped = vec![0u8; out_row * r.px_h as usize];
-                for (i, line) in pixels.chunks_exact(sw * 4).enumerate() {
-                    let dst = (r.px_h as usize - 1 - i) * out_row;
-                    flipped[dst..dst + sw * 4].copy_from_slice(line);
-                }
-                flipped
-            };
-            if let Some(encoder) = self.encoder.as_mut() {
-                encoder.send_frame_buffer(&flipped, timestamp)?;
+            let written = self.write(pixels, sw, sh, timestamp);
+            if self.zoom.is_some() {
+                let (px, w, h) = self.source.get_or_insert_with(Default::default);
+                px.clear();
+                px.extend_from_slice(pixels);
+                (*w, *h) = (sw, sh);
             }
-            if let Some(gif) = self.gif.as_mut() {
-                let t = Duration::from_nanos(timestamp.max(0) as u64 * 100);
-                gif.push(&flipped, r.px_w as usize * 4, true, t);
-                return Ok(());
-            }
-            self.last = Some(flipped);
-            Ok(())
+            self.scratch = scratch;
+            written
         }
     }
 
     pub struct Recorder {
         control: CaptureControl<Handler, Error>,
         sound: Option<sound::Sound>,
+        /// Keeps the zoom moving on a still screen, and its stop flag.
+        ticker: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
     }
 
     /// Windows asks for nothing up front; a blocked microphone fails to open.
@@ -984,8 +1279,10 @@ mod imp {
             audio: super::Audio,
             cursor: bool,
             _keep: &[u32],
+            zoom: Option<Arc<Zoom>>,
         ) -> Result<Self, String> {
             let with_sound = audio.system || audio.mic;
+            let ticks = zoom.is_some();
             let center = POINT {
                 x: b.x + b.w as i32 / 2,
                 y: b.y + b.h as i32 / 2,
@@ -1004,13 +1301,25 @@ mod imp {
                 MinimumUpdateIntervalSettings::Custom(Duration::from_millis(1000 / FPS as u64)),
                 DirtyRegionSettings::Default,
                 ColorFormat::Bgra8,
-                (r, path.to_path_buf(), with_sound),
+                (r, path.to_path_buf(), with_sound, zoom),
             );
             let control = Handler::start_free_threaded(settings).map_err(|e| e.to_string())?;
+            let ticker = ticks.then(|| {
+                let stop = Arc::new(AtomicBool::new(false));
+                let (flag, handler) = (stop.clone(), control.callback());
+                let thread = std::thread::spawn(move || {
+                    while !flag.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1000 / FPS as u64));
+                        handler.lock().tick();
+                    }
+                });
+                (thread, stop)
+            });
             if !with_sound {
                 return Ok(Self {
                     control,
                     sound: None,
+                    ticker,
                 });
             }
             let handler = control.callback();
@@ -1023,8 +1332,13 @@ mod imp {
                 Ok(sound) => Ok(Self {
                     control,
                     sound: Some(sound),
+                    ticker,
                 }),
                 Err(e) => {
+                    if let Some((thread, stop)) = ticker {
+                        stop.store(true, Ordering::SeqCst);
+                        let _ = thread.join();
+                    }
                     let _ = control.stop();
                     Err(e)
                 }
@@ -1032,6 +1346,10 @@ mod imp {
         }
 
         pub fn stop(mut self) -> Result<(), String> {
+            if let Some((thread, stop)) = self.ticker.take() {
+                stop.store(true, Ordering::SeqCst);
+                let _ = thread.join();
+            }
             if let Some(sound) = self.sound.take() {
                 sound.stop();
             }
@@ -1061,6 +1379,7 @@ mod imp {
 
     use super::{Audio, Region};
     use crate::capture::Bounds;
+    use crate::zoom::Zoom;
 
     pub struct Recorder {
         child: Child,
@@ -1078,6 +1397,7 @@ mod imp {
             audio: Audio,
             cursor: bool,
             _keep: &[u32],
+            _zoom: Option<std::sync::Arc<Zoom>>,
         ) -> Result<Self, String> {
             if std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t == "wayland") {
                 return Err("recording on Wayland isn't supported yet: log in with an X11 (Xorg) session to record".into());
@@ -1276,9 +1596,13 @@ mod tests {
         // 2×2 → 1×1 averages; rows come out bottom first.
         let px = |v: u8| [v, v, v, 255];
         let src: Vec<u8> = [px(0), px(100), px(200), px(100)].concat();
-        assert_eq!(resample_flipped(&src, 2, 2, 1, 1)[..3], [100, 100, 100]);
+        assert_eq!(resample_flipped(&src, 8, 2, 2, 1, 1)[..3], [100, 100, 100]);
         let tall: Vec<u8> = [px(10), px(250)].concat();
-        let out = resample_flipped(&tall, 1, 2, 1, 2);
+        let out = resample_flipped(&tall, 4, 1, 2, 1, 2);
+        assert_eq!((out[0], out[4]), (250, 10));
+        // A stride wider than the row skips what's past it.
+        let wide: Vec<u8> = [px(10), px(99), px(250), px(99)].concat();
+        let out = resample_flipped(&wide, 8, 1, 2, 1, 2);
         assert_eq!((out[0], out[4]), (250, 10));
     }
 
@@ -1299,6 +1623,7 @@ mod tests {
                 Audio::default(),
                 true,
                 &[],
+                None,
             )
             .unwrap();
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1319,11 +1644,45 @@ mod tests {
             system: true,
             mic: false,
         };
-        let (rec, warning) = start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio, true, &[]).unwrap();
+        let (rec, warning) =
+            start(&b, [0.0, 0.0, 0.5, 0.5], 50, &path, audio, true, &[], None).unwrap();
         assert_eq!(warning, None);
         std::thread::sleep(std::time::Duration::from_secs(2));
         rec.stop().unwrap();
         assert!(std::fs::metadata(&path).unwrap().len() > 1000);
+    }
+
+    /// Records zoomed in, on a still screen too, as MP4 and GIF; needs the
+    /// same permission.
+    #[test]
+    #[ignore]
+    fn records_zoomed() {
+        let b = crate::capture::bounds_at((10, 10)).unwrap();
+        let view = crate::zoom::View {
+            scale: 2.0,
+            x: 0.3,
+            y: 0.3,
+        };
+        for ext in ["mp4", "gif"] {
+            let path = std::env::temp_dir().join(format!("kliksnap-record-zoom.{ext}"));
+            let _ = std::fs::remove_file(&path);
+            let zoom = Some(crate::zoom::Zoom::fixed(view));
+            let (rec, _) = start(
+                &b,
+                [0.0, 0.0, 0.5, 0.5],
+                100,
+                &path,
+                Audio::default(),
+                true,
+                &[],
+                zoom,
+            )
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            rec.stop().unwrap();
+            let len = std::fs::metadata(&path).unwrap().len();
+            assert!(len > 1000, "{ext}: file is only {len} bytes");
+        }
     }
 
     /// Like `records_an_mp4`, for a GIF. Run with `cargo test -- --ignored`.
@@ -1341,6 +1700,7 @@ mod tests {
             Audio::default(),
             true,
             &[],
+            None,
         )
         .unwrap();
         std::thread::sleep(std::time::Duration::from_secs(2));

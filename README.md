@@ -34,7 +34,7 @@
 - **Floating preview** after each capture: copy, save, pin, or open the editor
 - **Share** from the editor through the system share menu (AirDrop, Messages, Mail… / Windows Share)
 - **Scrolling capture**: select an area and KlikSnap scrolls it to the end by itself, then stitches one tall image (sticky headers kept once). On macOS auto-scroll needs Accessibility permission; without it, and on Linux, you scroll by hand
-- **Screen recording** to MP4 (area or full screen) with the OS's built-in H.264 encoder, with the computer's sound and the microphone if you want them, the mouse pointer shown or hidden, clicks highlighted and your webcam in a bubble you can drag around (macOS and Windows)
+- **Screen recording** to MP4 (area or full screen) with the OS's built-in H.264 encoder, with the computer's sound and the microphone if you want them, the mouse pointer shown or hidden, clicks highlighted, a zoom in on the mouse while you hold a key, and your webcam in a bubble you can drag around (macOS and Windows)
 - **Record GIF**: an area straight to an animated GIF
 - **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
@@ -138,6 +138,7 @@ src-tauri/src/
   capture.rs    screen/window capture (xcap), cropping
   ocr.rs        Apple Vision / Windows.Media.Ocr / Tesseract, QR codes
   record.rs     screen recording (ScreenCaptureKit / Windows Graphics Capture → MP4; ffmpeg on Linux)
+  zoom.rs       zooms recordings in on the mouse while a key is held
   ui.rs         window creation and placement
   commands.rs   commands called from the webviews
   output.rs     clipboard, PNG saving
