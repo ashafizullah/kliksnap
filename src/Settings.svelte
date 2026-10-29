@@ -417,11 +417,9 @@
           {#if updateStatus}
             <p class="hint" class:error={updateStatus.failed} role="status">{updateStatus.text}</p>
           {/if}
-          <div class="row">
-            <span>{tr("Open-source licenses")}</span>
-            <button class="secondary" aria-expanded={notices !== null} onclick={toggleLicenses}>
-              {notices === null ? tr("Show") : tr("Hide")}
-            </button>
+          <div class="row links">
+            <button class="secondary" onclick={() => invoke("open_github")}>GitHub</button>
+            <button class="secondary" aria-expanded={notices !== null} onclick={toggleLicenses}>{tr("Open-source licenses")}</button>
           </div>
           {#if notices !== null}
             <pre class="notices">{notices}</pre>
@@ -987,6 +985,9 @@
     justify-content: space-between;
     gap: 12px;
     min-height: 34px;
+  }
+  .row.links {
+    justify-content: flex-start;
   }
   .hint {
     font-size: 12px;

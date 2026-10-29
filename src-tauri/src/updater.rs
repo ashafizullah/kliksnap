@@ -69,7 +69,15 @@ pub fn info() -> Option<Info> {
 /// Opens the pending update's release page in the browser.
 pub fn open_notes() -> Result<(), String> {
     let version = PENDING.lock().unwrap().as_ref().map(|u| u.version.clone());
-    let url = release_url(&version.ok_or("no update")?);
+    open_url(&release_url(&version.ok_or("no update")?))
+}
+
+/// Opens KlikSnap's GitHub page in the browser.
+pub fn open_repo() -> Result<(), String> {
+    open_url(REPO)
+}
+
+fn open_url(url: &str) -> Result<(), String> {
     let program = if cfg!(target_os = "windows") {
         "explorer"
     } else if cfg!(target_os = "macos") {
@@ -84,8 +92,10 @@ pub fn open_notes() -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+const REPO: &str = "https://github.com/ashafizullah/kliksnap";
+
 fn release_url(version: &str) -> String {
-    format!("https://github.com/ashafizullah/kliksnap/releases/tag/v{version}")
+    format!("{REPO}/releases/tag/v{version}")
 }
 
 #[derive(Clone, serde::Serialize)]
