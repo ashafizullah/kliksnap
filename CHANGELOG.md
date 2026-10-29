@@ -3,7 +3,7 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
-## Unreleased
+## 0.15.0
 
 ### Added
 
