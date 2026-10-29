@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.15.1
+
+### Changed
+
+- Zoom while recording now zooms the screen live too, so you see what's being recorded (macOS), and keeps what's under the pointer in place, so clicks land where you see them
+
 ## 0.15.0
 
 ### Added
