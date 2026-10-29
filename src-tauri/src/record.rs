@@ -201,8 +201,9 @@ mod imp {
 
     use block2::RcBlock;
     use dispatch2::DispatchQueue;
+    use objc2::rc::Allocated;
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyObject, Bool, ProtocolObject, Sel};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ProtocolObject, Sel};
     use objc2::{define_class, msg_send, sel, AllocAnyThread, DefinedClass};
     use objc2_av_foundation::{
         AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
@@ -520,12 +521,304 @@ mod imp {
         }
     );
 
+    #[link(name = "CoreVideo", kind = "framework")]
+    extern "C" {
+        fn CVPixelBufferGetIOSurface(buffer: &CVPixelBuffer) -> *mut AnyObject;
+    }
+
+    // CALayer and CATransaction.
+    #[link(name = "QuartzCore", kind = "framework")]
+    extern "C" {}
+
+    pub struct LiveIvars {
+        layer: Retained<AnyObject>,
+        /// The frame on screen, kept until the next one replaces it.
+        current: Mutex<Option<CFRetained<CVPixelBuffer>>>,
+    }
+
+    define_class!(
+        // Puts the live capture's frames on the zoom window's layer.
+        #[unsafe(super(NSObject))]
+        #[name = "KlikSnapZoomOutput"]
+        #[ivars = LiveIvars]
+        struct LiveOutput;
+
+        unsafe impl NSObjectProtocol for LiveOutput {}
+
+        unsafe impl SCStreamOutput for LiveOutput {
+            #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
+            unsafe fn stream_did_output(
+                &self,
+                _stream: &SCStream,
+                buffer: &CMSampleBuffer,
+                kind: SCStreamOutputType,
+            ) {
+                unsafe {
+                    if kind != SCStreamOutputType::Screen || !buffer.is_valid() {
+                        return;
+                    }
+                    let Some(image) = buffer.image_buffer() else {
+                        return;
+                    };
+                    let surface = CVPixelBufferGetIOSurface(&image);
+                    if surface.is_null() {
+                        return;
+                    }
+                    let ivars = self.ivars();
+                    transaction(|| {
+                        let _: () = msg_send![&*ivars.layer, setContents: surface];
+                    });
+                    *ivars.current.lock().unwrap() = Some(image);
+                }
+            }
+        }
+    );
+
+    /// Changes layers at once, without Core Animation's implicit fades; on
+    /// any thread.
+    fn transaction(f: impl FnOnce()) {
+        let Some(cls) = AnyClass::get(c"CATransaction") else {
+            return;
+        };
+        unsafe {
+            let _: () = msg_send![cls, begin];
+            let _: () = msg_send![cls, setDisableActions: true];
+            f();
+            let _: () = msg_send![cls, commit];
+        }
+    }
+
+    /// Runs `f` on the main thread, where AppKit wants windows made; None
+    /// when the main thread doesn't get to it soon (or ever, as in tests).
+    fn on_main<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> Option<R> {
+        let main = AnyClass::get(c"NSThread").is_some_and(|c| unsafe {
+            let main: bool = msg_send![c, isMainThread];
+            main
+        });
+        if main {
+            return Some(f());
+        }
+        let (tx, rx) = mpsc::channel();
+        let late = Arc::new(AtomicBool::new(false));
+        let skip = late.clone();
+        // What comes too late is dropped, which closes a window.
+        DispatchQueue::main().exec_async(move || {
+            if !skip.load(Ordering::SeqCst) {
+                let _ = tx.send(f());
+            }
+        });
+        let out = rx.recv_timeout(Duration::from_secs(2)).ok();
+        late.store(true, Ordering::SeqCst);
+        out
+    }
+
+    /// A window over the region recorded that ignores the mouse, with a
+    /// hidden layer filling it; closed when dropped.
+    struct Overlay {
+        window: Retained<AnyObject>,
+        layer: Retained<AnyObject>,
+    }
+
+    impl Overlay {
+        fn open(b: &Bounds, r: Region) -> Option<Self> {
+            let b = *b;
+            on_main(move || unsafe { overlay(&b, r) }.map(AnyThread))
+                .flatten()
+                .map(|o| o.0)
+        }
+    }
+
+    impl Drop for Overlay {
+        fn drop(&mut self) {
+            let window = AnyThread(self.window.clone());
+            DispatchQueue::main().exec_async(move || unsafe {
+                let _: () = msg_send![&**window.get(), close];
+            });
+        }
+    }
+
+    /// Opens the overlay for region `r` of monitor `b`. Main thread only.
+    unsafe fn overlay(b: &Bounds, r: Region) -> Option<Overlay> {
+        let window_cls = AnyClass::get(c"NSWindow")?;
+        let screen_cls = AnyClass::get(c"NSScreen")?;
+        let color_cls = AnyClass::get(c"NSColor")?;
+        let layer_cls = AnyClass::get(c"CALayer")?;
+        unsafe {
+            // AppKit counts y up from the bottom of the main screen.
+            let screens: Option<Retained<AnyObject>> = msg_send![screen_cls, screens];
+            let main: Option<Retained<AnyObject>> = msg_send![&*screens?, firstObject];
+            let main: CGRect = msg_send![&*main?, frame];
+            let frame = CGRect::new(
+                CGPoint::new(
+                    b.x as f64 + r.x,
+                    main.size.height - (b.y as f64 + r.y + r.h),
+                ),
+                CGSize::new(r.w, r.h),
+            );
+            const BORDERLESS: usize = 0;
+            const BUFFERED: usize = 2;
+            let window: Allocated<AnyObject> = msg_send![window_cls, alloc];
+            let window: Option<Retained<AnyObject>> = msg_send![
+                window,
+                initWithContentRect: frame,
+                styleMask: BORDERLESS,
+                backing: BUFFERED,
+                defer: false
+            ];
+            let window = window?;
+            let clear: Option<Retained<AnyObject>> = msg_send![color_cls, clearColor];
+            let _: () = msg_send![&*window, setReleasedWhenClosed: false];
+            let _: () = msg_send![&*window, setOpaque: false];
+            let _: () = msg_send![&*window, setBackgroundColor: clear.as_deref()];
+            let _: () = msg_send![&*window, setHasShadow: false];
+            let _: () = msg_send![&*window, setIgnoresMouseEvents: true];
+            // Above the menu bar and the Dock, below menus.
+            let _: () = msg_send![&*window, setLevel: 100isize];
+            // On every space, full-screen apps' too, and out of Cmd-`.
+            const BEHAVIOR: usize = 1 | 16 | 64 | 256;
+            let _: () = msg_send![&*window, setCollectionBehavior: BEHAVIOR];
+            let view: Option<Retained<AnyObject>> = msg_send![&*window, contentView];
+            let view = view?;
+            let _: () = msg_send![&*view, setWantsLayer: true];
+            let root: Option<Retained<AnyObject>> = msg_send![&*view, layer];
+            let layer: Retained<AnyObject> = msg_send![layer_cls, new];
+            let bounds: CGRect = msg_send![&*view, bounds];
+            const FILL: u32 = 2 | 16;
+            let _: () = msg_send![&*layer, setFrame: bounds];
+            let _: () = msg_send![&*layer, setAutoresizingMask: FILL];
+            let _: () = msg_send![&*layer, setHidden: true];
+            let _: () = msg_send![&*root?, addSublayer: &*layer];
+            let _: () = msg_send![&*window, orderFrontRegardless];
+            Some(Overlay { window, layer })
+        }
+    }
+
+    /// Shows the zoom live: a window over the region showing a second capture
+    /// of it cropped to the view. Like KlikSnap's other windows it is left
+    /// out of both captures, and that capture leaves the pointer out, as
+    /// macOS draws the real one on top.
+    struct Live {
+        stream: Retained<SCStream>,
+        _output: Retained<LiveOutput>,
+        _queue: dispatch2::DispatchRetained<DispatchQueue>,
+        _overlay: Overlay,
+        /// Moves the layer with the view, and its stop flag.
+        thread: JoinHandle<()>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Live {
+        unsafe fn start(
+            b: &Bounds,
+            r: Region,
+            filter: &SCContentFilter,
+            zoom: Arc<Zoom>,
+            overlay: Overlay,
+        ) -> Result<Self, String> {
+            let even = |v: f64| (((v * b.scale).round() as usize) & !1).max(2);
+            let (stream, output, queue) = unsafe {
+                let config = SCStreamConfiguration::new();
+                config.setWidth(even(r.w));
+                config.setHeight(even(r.h));
+                config.setSourceRect(CGRect::new(CGPoint::new(r.x, r.y), CGSize::new(r.w, r.h)));
+                config.setMinimumFrameInterval(CMTime::new(1, 60));
+                config.setShowsCursor(false);
+                config.setPixelFormat(u32::from_be_bytes(*b"BGRA"));
+                config.setQueueDepth(4);
+                let output = LiveOutput::alloc().set_ivars(LiveIvars {
+                    layer: overlay.layer.clone(),
+                    current: Mutex::new(None),
+                });
+                let output: Retained<LiveOutput> = msg_send![super(output), init];
+                let queue = DispatchQueue::new("app.kliksnap.zoom", None);
+                let stream = SCStream::initWithFilter_configuration_delegate(
+                    SCStream::alloc(),
+                    filter,
+                    &config,
+                    None,
+                );
+                stream
+                    .addStreamOutput_type_sampleHandlerQueue_error(
+                        ProtocolObject::from_ref(&*output),
+                        SCStreamOutputType::Screen,
+                        Some(&queue),
+                    )
+                    .map_err(|e| e.localizedDescription().to_string())?;
+                start_stream(&stream)?;
+                (stream, output, queue)
+            };
+            let stop = Arc::new(AtomicBool::new(false));
+            let (flag, layer) = (stop.clone(), AnyThread(overlay.layer.clone()));
+            let thread = std::thread::spawn(move || {
+                let layer = layer.get();
+                let mut shown = View::FULL;
+                while !flag.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(8));
+                    let view = zoom.view();
+                    if view == shown {
+                        continue;
+                    }
+                    shown = view;
+                    let [x, y, w, h] = view.rect();
+                    // Layers count y up from the bottom.
+                    let rect = CGRect::new(CGPoint::new(x, 1.0 - y - h), CGSize::new(w, h));
+                    transaction(|| unsafe {
+                        let _: () = msg_send![&**layer, setContentsRect: rect];
+                        let _: () = msg_send![&**layer, setHidden: view.is_full()];
+                    });
+                }
+            });
+            Ok(Self {
+                stream,
+                _output: output,
+                _queue: queue,
+                _overlay: overlay,
+                thread,
+                stop,
+            })
+        }
+
+        fn stop(self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = self.thread.join();
+            if let Err(e) = stop_stream(&self.stream) {
+                eprintln!("stopping the live zoom: {e}");
+            }
+        }
+    }
+
+    fn start_stream(stream: &SCStream) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        let done = RcBlock::new(move |e: *mut NSError| {
+            let _ = tx.send(ns_error(e));
+        });
+        unsafe { stream.startCaptureWithCompletionHandler(Some(&done)) };
+        match rx.recv_timeout(WAIT) {
+            Ok(None) => Ok(()),
+            Ok(Some(e)) => Err(e),
+            Err(_) => Err("recording didn't start".into()),
+        }
+    }
+
+    fn stop_stream(stream: &SCStream) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel();
+        let done = RcBlock::new(move |e: *mut NSError| {
+            let _ = tx.send(ns_error(e));
+        });
+        unsafe { stream.stopCaptureWithCompletionHandler(Some(&done)) };
+        match rx.recv_timeout(WAIT) {
+            Ok(Some(e)) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
     pub struct Recorder {
         stream: Retained<SCStream>,
         output: Retained<Output>,
         queue: dispatch2::DispatchRetained<DispatchQueue>,
         /// Keeps the zoom moving on a still screen, and its stop flag.
         ticker: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
+        live: Option<Live>,
     }
 
     // The stream and writer are only touched on their queue or after the
@@ -589,6 +882,9 @@ mod imp {
             keep: &[u32],
             zoom: Option<Arc<Zoom>>,
         ) -> Result<Self, String> {
+            // Before listing what's on screen: macOS only leaves out the
+            // windows of apps it lists, and an app without windows isn't.
+            let overlay = zoom.as_ref().and_then(|_| Overlay::open(b, r));
             let content = shareable_content()?;
             let display = unsafe { content.displays() }
                 .iter()
@@ -652,6 +948,7 @@ mod imp {
             } else {
                 Writer::Mp4(new_writer(path, r, audio)?)
             };
+            let live_zoom = zoom.clone();
             let ticks = zoom.is_some();
             let output = Output::alloc().set_ivars(Ivars {
                 writer,
@@ -689,17 +986,13 @@ mod imp {
                 }
                 .map_err(|e| e.localizedDescription().to_string())?;
             }
-            let (tx, rx) = mpsc::channel();
-            let done = RcBlock::new(move |e: *mut NSError| {
-                let _ = tx.send(ns_error(e));
+            start_stream(&stream)?;
+            // Without it the zoom is still recorded, just not seen.
+            let live = live_zoom.zip(overlay).and_then(|(zoom, overlay)| {
+                unsafe { Live::start(b, r, &filter, zoom, overlay) }
+                    .map_err(|e| eprintln!("live zoom: {e}"))
+                    .ok()
             });
-            unsafe { stream.startCaptureWithCompletionHandler(Some(&done)) };
-            if let Some(e) = rx
-                .recv_timeout(WAIT)
-                .map_err(|_| "recording didn't start")?
-            {
-                return Err(e);
-            }
             let ticker = ticks.then(|| {
                 let stop = Arc::new(AtomicBool::new(false));
                 let (flag, output, queue) = (
@@ -723,21 +1016,20 @@ mod imp {
                 output,
                 queue,
                 ticker,
+                live,
             })
         }
 
         /// Stops recording and finishes the file.
         pub fn stop(self) -> Result<(), String> {
+            if let Some(live) = self.live {
+                live.stop();
+            }
             if let Some((thread, stop)) = self.ticker {
                 stop.store(true, Ordering::SeqCst);
                 let _ = thread.join();
             }
-            let (tx, rx) = mpsc::channel();
-            let done = RcBlock::new(move |e: *mut NSError| {
-                let _ = tx.send(ns_error(e));
-            });
-            unsafe { self.stream.stopCaptureWithCompletionHandler(Some(&done)) };
-            if let Ok(Some(e)) = rx.recv_timeout(WAIT) {
+            if let Err(e) = stop_stream(&self.stream) {
                 eprintln!("stopping the recording: {e}");
             }
             // Finish on the frames' queue, after any frame still in flight.

@@ -1,6 +1,8 @@
 //! Zooms a recording in on the mouse while a key is held. A thread follows
 //! the key and the mouse and eases the view toward them; the recorder crops
-//! each frame to the view and scales it back up to the video's size.
+//! each frame to the view and scales it back up to the video's size. The
+//! view is anchored at the mouse: what is under the pointer stays under it,
+//! so the zoom can be shown live on screen and clicks still land right.
 #![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,9 +16,8 @@ use crate::platform;
 pub const MIN_LEVEL: u32 = 125;
 pub const MAX_LEVEL: u32 = 400;
 
-/// Seconds the view takes to get most of the way to where it's going.
-const EASE_SCALE: f64 = 0.12;
-const EASE_PAN: f64 = 0.1;
+/// Seconds the zoom takes to get most of the way to where it's going.
+const EASE: f64 = 0.12;
 
 /// The modifier key held to zoom: "ctrl", "alt" (Option), "shift" or
 /// "meta" (Command, or the Windows key). Held with another modifier, as in
@@ -31,8 +32,8 @@ pub fn key_mask(key: &str) -> Option<u8> {
     }
 }
 
-/// What a frame shows: magnified `scale` times around `(x, y)`, fractions
-/// of the region recorded.
+/// What a frame shows: magnified `scale` times with `(x, y)` held in place,
+/// fractions of the region recorded.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     pub scale: f64,
@@ -51,40 +52,39 @@ impl View {
         self.scale <= 1.0
     }
 
+    /// The part of the region shown: x, y, width and height as fractions,
+    /// y from the top.
+    pub fn rect(&self) -> [f64; 4] {
+        let size = 1.0 / self.scale.max(1.0);
+        let x = self.x.clamp(0.0, 1.0) * (1.0 - size);
+        let y = self.y.clamp(0.0, 1.0) * (1.0 - size);
+        [x, y, size, size]
+    }
+
     /// The part of a `w`×`h` frame shown: x, y, width and height in pixels,
     /// kept inside the frame.
     pub fn crop(&self, w: usize, h: usize) -> (usize, usize, usize, usize) {
-        let s = self.scale.max(1.0);
-        let cw = ((w as f64 / s).round() as usize).clamp(1, w.max(1));
-        let ch = ((h as f64 / s).round() as usize).clamp(1, h.max(1));
-        let x = (self.x * w as f64 - cw as f64 / 2.0)
-            .round()
-            .clamp(0.0, w.saturating_sub(cw) as f64) as usize;
-        let y = (self.y * h as f64 - ch as f64 / 2.0)
-            .round()
-            .clamp(0.0, h.saturating_sub(ch) as f64) as usize;
+        let [fx, fy, fw, fh] = self.rect();
+        let cw = ((w as f64 * fw).round() as usize).clamp(1, w.max(1));
+        let ch = ((h as f64 * fh).round() as usize).clamp(1, h.max(1));
+        let x = (fx * w as f64).round().min(w.saturating_sub(cw) as f64) as usize;
+        let y = (fy * h as f64).round().min(h.saturating_sub(ch) as f64) as usize;
         (x, y, cw, ch)
     }
 
-    /// The view `dt` seconds on, easing toward `level` around the mouse at
-    /// `(mx, my)` while `held`, and back out where it is when not.
+    /// The view `dt` seconds on, easing toward `level` while `held` and back
+    /// out when not, at the mouse `(mx, my)`.
     fn step(self, held: bool, level: f64, (mx, my): (f64, f64), dt: f64) -> View {
-        let mut v = self;
-        if held && v.is_full() {
-            // Zoom in where the mouse is, not where the last zoom ended.
-            (v.x, v.y) = (mx, my);
-        }
         let target = if held { level } else { 1.0 };
-        v.scale += (target - v.scale) * (1.0 - (-dt / EASE_SCALE).exp());
-        if (v.scale - target).abs() < 0.002 {
-            v.scale = target;
+        let mut scale = self.scale + (target - self.scale) * (1.0 - (-dt / EASE).exp());
+        if (scale - target).abs() < 0.002 {
+            scale = target;
         }
-        if held {
-            let k = 1.0 - (-dt / EASE_PAN).exp();
-            v.x += (mx - v.x) * k;
-            v.y += (my - v.y) * k;
+        View {
+            scale,
+            x: mx,
+            y: my,
         }
-        v
     }
 }
 
@@ -149,6 +149,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_mouse_stays_on_what_it_points_at() {
+        for (x, y) in [(0.0, 0.0), (0.3, 0.8), (1.0, 0.5)] {
+            let v = View { scale: 3.0, x, y };
+            let [fx, fy, fw, fh] = v.rect();
+            // The point under the mouse shows at the mouse.
+            assert!(((x - fx) / fw - x).abs() < 1e-9);
+            assert!(((y - fy) / fh - y).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn crop_stays_inside_the_frame() {
         let v = View {
             scale: 2.0,
@@ -175,8 +186,7 @@ mod tests {
         assert!((v.x - 0.2).abs() < 1e-3 && (v.y - 0.7).abs() < 1e-3);
         let half = v.step(false, 2.0, (0.9, 0.9), 0.05);
         assert!(half.scale > 1.0 && half.scale < 2.0);
-        // Zooming out stays where it was.
-        assert_eq!((half.x, half.y), (v.x, v.y));
+        assert_eq!((half.x, half.y), (0.9, 0.9));
         for _ in 0..200 {
             v = v.step(false, 2.0, (0.9, 0.9), 0.01);
         }
