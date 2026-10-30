@@ -1383,6 +1383,7 @@ mod imp {
         sound: Option<sound::Sound>,
         /// Keeps the zoom moving on a still screen, and its stop flag.
         ticker: Option<(JoinHandle<()>, Arc<AtomicBool>)>,
+        live: Option<live::Live>,
     }
 
     /// Windows asks for nothing up front; a blocked microphone fails to open.
@@ -1550,6 +1551,209 @@ mod imp {
         }
     }
 
+    /// Shows the zoom live: a window over the region that ignores the mouse,
+    /// holding a magnifier control (the Magnification API) set to the view.
+    /// It is left out of the recording and of its own source, and draws no
+    /// pointer, as Windows draws the real one on top.
+    mod live {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{mpsc, Arc};
+        use std::thread::JoinHandle;
+        use std::time::Duration;
+
+        use windows::core::w;
+        use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+        use windows::Win32::Graphics::Gdi::InvalidateRect;
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::Magnification::{
+            MagInitialize, MagSetWindowFilterList, MagSetWindowSource, MagSetWindowTransform,
+            MagUninitialize, MAGTRANSFORM, MW_FILTERMODE_EXCLUDE, WC_MAGNIFIER,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW,
+            RegisterClassW, SetLayeredWindowAttributes, SetWindowDisplayAffinity, ShowWindow,
+            LWA_ALPHA, MSG, PM_REMOVE, SW_HIDE, SW_SHOWNOACTIVATE, WDA_EXCLUDEFROMCAPTURE,
+            WINDOW_EX_STYLE, WNDCLASSW, WS_CHILD, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_VISIBLE,
+        };
+
+        use super::super::Region;
+        use crate::capture::Bounds;
+        use crate::zoom::Zoom;
+
+        pub struct Live {
+            thread: JoinHandle<()>,
+            stop: Arc<AtomicBool>,
+        }
+
+        impl Live {
+            /// Opens the window over region `r` of monitor `b`, following `zoom`.
+            pub fn start(b: &Bounds, r: Region, zoom: Arc<Zoom>) -> Result<Self, String> {
+                let (x, y) = (b.x + r.x as i32, b.y + r.y as i32);
+                let screen = RECT {
+                    left: x,
+                    top: y,
+                    right: x + r.w as i32,
+                    bottom: y + r.h as i32,
+                };
+                let stop = Arc::new(AtomicBool::new(false));
+                let flag = stop.clone();
+                let (tx, rx) = mpsc::channel();
+                // Windows belong to the thread that made them: open, run and
+                // close them all on this one.
+                let thread = std::thread::spawn(move || unsafe { run(screen, &zoom, &flag, tx) });
+                rx.recv()
+                    .map_err(|_| "the live zoom thread stopped".to_string())??;
+                Ok(Self { thread, stop })
+            }
+
+            pub fn stop(self) {
+                self.stop.store(true, Ordering::SeqCst);
+                let _ = self.thread.join();
+            }
+        }
+
+        unsafe fn run(
+            screen: RECT,
+            zoom: &Zoom,
+            stop: &AtomicBool,
+            ready: mpsc::Sender<Result<(), String>>,
+        ) {
+            if !unsafe { MagInitialize() }.as_bool() {
+                let _ = ready.send(Err("the magnifier didn't start".into()));
+                return;
+            }
+            match unsafe { open(screen) } {
+                Ok((host, mag)) => {
+                    let _ = ready.send(Ok(()));
+                    unsafe { follow(screen, host, mag, zoom, stop) };
+                    let _ = unsafe { DestroyWindow(host) };
+                }
+                Err(e) => {
+                    let _ = ready.send(Err(e));
+                }
+            }
+            let _ = unsafe { MagUninitialize() };
+        }
+
+        unsafe extern "system" fn host_proc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+
+        /// Opens the hidden window over `s` (screen pixels) and the magnifier
+        /// filling it.
+        unsafe fn open(s: RECT) -> Result<(HWND, HWND), String> {
+            unsafe {
+                let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
+                let class = w!("KlikSnapLiveZoom");
+                let wc = WNDCLASSW {
+                    lpfnWndProc: Some(host_proc),
+                    hInstance: instance.into(),
+                    lpszClassName: class,
+                    ..Default::default()
+                };
+                // Fails harmlessly when an earlier recording registered it.
+                RegisterClassW(&wc);
+                let (w, h) = (s.right - s.left, s.bottom - s.top);
+                // Layered and transparent, so clicks go through to what's below.
+                let host = CreateWindowExW(
+                    WS_EX_TOPMOST
+                        | WS_EX_LAYERED
+                        | WS_EX_TRANSPARENT
+                        | WS_EX_TOOLWINDOW
+                        | WS_EX_NOACTIVATE,
+                    class,
+                    w!(""),
+                    WS_POPUP,
+                    s.left,
+                    s.top,
+                    w,
+                    h,
+                    None,
+                    None,
+                    Some(instance.into()),
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+                let _ = SetLayeredWindowAttributes(host, COLORREF(0), 255, LWA_ALPHA);
+                // Out of the recording, which would zoom it in again.
+                let _ = SetWindowDisplayAffinity(host, WDA_EXCLUDEFROMCAPTURE);
+                let mag = match CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    WC_MAGNIFIER,
+                    w!(""),
+                    WS_CHILD | WS_VISIBLE,
+                    0,
+                    0,
+                    w,
+                    h,
+                    Some(host),
+                    None,
+                    Some(instance.into()),
+                    None,
+                ) {
+                    Ok(mag) => mag,
+                    Err(e) => {
+                        let _ = DestroyWindow(host);
+                        return Err(e.to_string());
+                    }
+                };
+                // Out of its own source, which would show it inside itself.
+                let mut own = host;
+                let _ = MagSetWindowFilterList(mag, MW_FILTERMODE_EXCLUDE, 1, &mut own);
+                Ok((host, mag))
+            }
+        }
+
+        /// Sets the magnifier to the view until stopped, showing the window
+        /// only while zoomed. The magnifier only redraws when asked, so it is
+        /// asked every few milliseconds.
+        unsafe fn follow(s: RECT, host: HWND, mag: HWND, zoom: &Zoom, stop: &AtomicBool) {
+            let (w, h) = ((s.right - s.left) as usize, (s.bottom - s.top) as usize);
+            let mut shown = false;
+            let mut msg = MSG::default();
+            while !stop.load(Ordering::SeqCst) {
+                unsafe {
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&msg);
+                    }
+                    let view = zoom.view();
+                    if view.is_full() {
+                        if shown {
+                            let _ = ShowWindow(host, SW_HIDE);
+                            shown = false;
+                        }
+                    } else {
+                        let (x, y, cw, ch) = view.crop(w, h);
+                        let source = RECT {
+                            left: s.left + x as i32,
+                            top: s.top + y as i32,
+                            right: s.left + (x + cw) as i32,
+                            bottom: s.top + (y + ch) as i32,
+                        };
+                        let (sx, sy) = (w as f32 / cw as f32, h as f32 / ch as f32);
+                        let mut transform = MAGTRANSFORM {
+                            v: [sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0],
+                        };
+                        let _ = MagSetWindowTransform(mag, &mut transform);
+                        let _ = MagSetWindowSource(mag, source);
+                        let _ = InvalidateRect(Some(mag), None, true);
+                        if !shown {
+                            let _ = ShowWindow(host, SW_SHOWNOACTIVATE);
+                            shown = true;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(8));
+            }
+        }
+    }
+
     /// Now on the capture clock (QPC, in 100 ns units).
     fn now() -> i64 {
         let (mut count, mut freq) = (0i64, 0i64);
@@ -1574,6 +1778,7 @@ mod imp {
             zoom: Option<Arc<Zoom>>,
         ) -> Result<Self, String> {
             let with_sound = audio.system || audio.mic;
+            let live_zoom = zoom.clone();
             let ticks = zoom.is_some();
             let center = POINT {
                 x: b.x + b.w as i32 / 2,
@@ -1607,11 +1812,18 @@ mod imp {
                 });
                 (thread, stop)
             });
+            // Without it the zoom is still recorded, just not seen.
+            let live = live_zoom.and_then(|zoom| {
+                live::Live::start(b, r, zoom)
+                    .map_err(|e| eprintln!("live zoom: {e}"))
+                    .ok()
+            });
             if !with_sound {
                 return Ok(Self {
                     control,
                     sound: None,
                     ticker,
+                    live,
                 });
             }
             let handler = control.callback();
@@ -1625,8 +1837,12 @@ mod imp {
                     control,
                     sound: Some(sound),
                     ticker,
+                    live,
                 }),
                 Err(e) => {
+                    if let Some(live) = live {
+                        live.stop();
+                    }
                     if let Some((thread, stop)) = ticker {
                         stop.store(true, Ordering::SeqCst);
                         let _ = thread.join();
@@ -1638,6 +1854,9 @@ mod imp {
         }
 
         pub fn stop(mut self) -> Result<(), String> {
+            if let Some(live) = self.live.take() {
+                live.stop();
+            }
             if let Some((thread, stop)) = self.ticker.take() {
                 stop.store(true, Ordering::SeqCst);
                 let _ = thread.join();

@@ -1,6 +1,6 @@
 [package]
 name = "kliksnap"
-version = "0.15.1"
+version = "0.15.2"
 description = "Free, open-source, lightweight screenshot tool"
 authors = ["KlikSnap contributors"]
 license = "MIT"
@@ -52,7 +52,7 @@ objc2-core-video = "0.3.2"
 rqrr = { version = "0.11.0", default-features = false }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Foundation_Collections", "ApplicationModel_DataTransfer", "Win32_UI_Shell", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_System_Performance"] }
+windows = { version = "0.62", features = ["Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Foundation_Collections", "ApplicationModel_DataTransfer", "Win32_UI_Shell", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Media_Audio", "Win32_System_Performance", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_WindowsAndMessaging"] }
 windows-collections = "0.3.2"
 windows-capture = "2.0.1"
 cpal = "0.15"
