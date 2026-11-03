@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.16.0
+
+### Added
+
+- Adjust the area before capturing: after you let go, drag the edges to resize the selection or the inside to move it, then press Enter. Recordings and scrolling captures always work this way; for screenshots and Copy Text, turn it on in Settings → Capture
+
 ## 0.15.2
 
 ### Changed
