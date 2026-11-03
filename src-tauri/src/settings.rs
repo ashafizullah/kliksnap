@@ -90,6 +90,10 @@ pub struct Settings {
     /// Area/window selection over the live screen, captured once the
     /// selection ends, instead of over a still taken when the shortcut fires.
     pub live_selection: bool,
+    /// An area selection stays on screen with handles after the mouse is
+    /// released, and is taken only on Enter. Recordings and scrolling
+    /// captures always work this way.
+    pub adjust_selection: bool,
     pub launch_at_login: bool,
     pub check_updates: bool,
     /// Windows: hiding the tray icon keeps KlikSnap running on its shortcuts;
@@ -153,6 +157,7 @@ impl Default for Settings {
             preview_secs: 6,
             history_limit: 50,
             live_selection: true,
+            adjust_selection: false,
             launch_at_login: false,
             check_updates: true,
             show_tray: true,

@@ -196,16 +196,25 @@ pub struct OverlayInfo {
     /// The still's size; 0 in live selection, which has none.
     width: u32,
     height: u32,
+    /// The selection stays adjustable after the mouse is released, until confirmed.
+    adjust: bool,
 }
 
 #[tauri::command]
 pub fn overlay_info(index: usize, state: State<AppState>) -> Option<OverlayInfo> {
     let frozen = state.frozen.lock().unwrap();
     let f = frozen.get(index)?;
+    let mode = *state.mode.lock().unwrap();
+    let adjust = match mode {
+        Mode::Record | Mode::RecordGif | Mode::Scroll => true,
+        Mode::Area | Mode::Text => state.settings().adjust_selection,
+        _ => false,
+    };
     Some(OverlayInfo {
-        mode: *state.mode.lock().unwrap(),
+        mode,
         width: f.img.as_ref().map_or(0, |i| i.width()),
         height: f.img.as_ref().map_or(0, |i| i.height()),
+        adjust,
     })
 }
 

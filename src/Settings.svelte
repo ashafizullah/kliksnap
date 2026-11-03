@@ -47,6 +47,7 @@
     preview_secs: number;
     history_limit: number;
     live_selection: boolean;
+    adjust_selection: boolean;
     launch_at_login: boolean;
     check_updates: boolean;
     show_tray: boolean;
@@ -455,6 +456,15 @@
             {s.live_selection
               ? tr("Videos keep playing; the shot is taken when you finish selecting. Open menus may close first.")
               : tr("The screen freezes when you press the shortcut, so open menus and tooltips stay in the shot.")}
+          </p>
+          <label class="row">
+            <span>{tr("Adjust the area before capturing")}</span>
+            <input type="checkbox" bind:checked={s.adjust_selection} onchange={save} />
+          </label>
+          <p class="hint">
+            {s.adjust_selection
+              ? tr("After you let go, drag the edges to resize or the area to move it, then press Enter. Recordings and scrolling captures always work this way.")
+              : tr("Letting go of the mouse captures right away. Recordings and scrolling captures still let you adjust the area first.")}
           </p>
         </section>
 

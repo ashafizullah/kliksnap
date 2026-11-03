@@ -6,6 +6,8 @@
 
   type Mode = "area" | "window" | "text";
   type Rect = { x: number; y: number; w: number; h: number };
+  /** What a drag on an adjustable selection changes: some of its edges (n, s, e, w) or all of it. */
+  type Part = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
   const index = Number(param("m") ?? 0);
   const src = imageUrl(`frozen-${index}-${param("g") ?? 0}`);
@@ -29,10 +31,17 @@
   // a click then copies the color.
   let hex = $state<string | null>(null);
   let picking = $state(false);
-  const canPick = $derived(mode === "area" && !recording && !scrolling);
   // Live selection shows the screen itself through the window; null until known.
   let live = $state<boolean | null>(null);
   let done = false;
+  // Adjustable selection: once the mouse is released the area stays, with
+  // handles, until Enter takes it.
+  let adjust = $state(false);
+  let region = $state<Rect | null>(null);
+  let edit = $state<{ part: Part; from: { x: number; y: number }; start: Rect } | null>(null);
+  // How close to an edge counts as grabbing it, in CSS pixels.
+  const GRAB = 6;
+  const canPick = $derived(mode === "area" && !recording && !scrolling && !region);
 
   const selection: Rect | null = $derived(
     dragStart
@@ -63,7 +72,77 @@
   });
 
   const selecting = $derived(mode !== "window");
-  const box = $derived(selecting ? selection : hovered);
+  const box = $derived(selecting ? (region ?? selection) : hovered);
+
+  /** The part of the adjustable selection under the cursor, if any. */
+  function partAt(x: number, y: number): Part | null {
+    if (!region) return null;
+    const { x: l, y: t, w, h } = region;
+    const r = l + w;
+    const b = t + h;
+    if (x < l - GRAB || x > r + GRAB || y < t - GRAB || y > b + GRAB) return null;
+    // Small selections leave the middle for moving.
+    const grab = Math.min(GRAB, w / 3, h / 3);
+    const ns = y <= t + grab ? "n" : y >= b - grab ? "s" : "";
+    const ew = x <= l + grab ? "w" : x >= r - grab ? "e" : "";
+    return ((ns + ew) as Part) || "move";
+  }
+
+  const CURSORS: Record<Part, string> = {
+    move: "move",
+    n: "ns-resize",
+    s: "ns-resize",
+    e: "ew-resize",
+    w: "ew-resize",
+    nw: "nwse-resize",
+    se: "nwse-resize",
+    ne: "nesw-resize",
+    sw: "nesw-resize",
+  };
+  const cursor = $derived.by(() => {
+    const part = edit?.part ?? (picking ? null : partAt(mouse.x, mouse.y));
+    return part ? CURSORS[part] : null;
+  });
+
+  /** `start` with the edges in `part` dragged by (dx, dy), kept on the screen. */
+  function adjusted(part: Part, start: Rect, dx: number, dy: number): Rect {
+    const clampX = (v: number) => Math.min(viewport.w, Math.max(0, v));
+    const clampY = (v: number) => Math.min(viewport.h, Math.max(0, v));
+    if (part === "move") {
+      return {
+        ...start,
+        x: Math.min(viewport.w - start.w, Math.max(0, start.x + dx)),
+        y: Math.min(viewport.h - start.h, Math.max(0, start.y + dy)),
+      };
+    }
+    let l = start.x;
+    let t = start.y;
+    let r = start.x + start.w;
+    let b = start.y + start.h;
+    if (part.includes("w")) l = clampX(l + dx);
+    if (part.includes("e")) r = clampX(r + dx);
+    if (part.includes("n")) t = clampY(t + dy);
+    if (part.includes("s")) b = clampY(b + dy);
+    // Dragging an edge past the opposite one flips the selection.
+    return { x: Math.min(l, r), y: Math.min(t, b), w: Math.abs(r - l), h: Math.abs(b - t) };
+  }
+
+  /** Takes the adjustable selection. */
+  function confirm(textOnly = false) {
+    if (region && region.w >= 3 && region.h >= 3) finish(region, mode === "text" && textOnly);
+  }
+
+  // The confirm buttons sit under the selection, or inside it at the bottom of the screen.
+  const TOOLS_H = 30;
+  const toolsPos = $derived(
+    region && {
+      right: Math.max(4, viewport.w - (region.x + region.w)),
+      top:
+        region.y + region.h + 8 + TOOLS_H <= viewport.h
+          ? region.y + region.h + 8
+          : Math.max(4, region.y + region.h - 8 - TOOLS_H),
+    },
+  );
   const pxRatio = $derived(imageWidth ? imageWidth / viewport.w : devicePixelRatio);
 
   function finish(rect: Rect | null, textOnly = false) {
@@ -76,6 +155,8 @@
   async function setMode(next: Mode) {
     mode = next;
     dragStart = null;
+    region = null;
+    edit = null;
     picking = false;
     if (next === "window" && !windows) windows = await invoke<number[][]>("overlay_windows", { index });
   }
@@ -111,6 +192,13 @@
       return;
     }
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    const part = partAt(e.clientX, e.clientY);
+    if (region && part) {
+      edit = { part, from: { x: e.clientX, y: e.clientY }, start: region };
+      return;
+    }
+    // Pressing outside the selection starts a new one.
+    region = null;
     dragStart = { x: e.clientX, y: e.clientY };
   }
 
@@ -119,6 +207,7 @@
   function onPointerMove(e: PointerEvent) {
     lastMove = performance.now();
     mouse = { x: e.clientX, y: e.clientY };
+    if (edit) region = adjusted(edit.part, edit.start, mouse.x - edit.from.x, mouse.y - edit.from.y);
   }
 
   // The webview gets no mouse moves until KlikSnap is the active app, which
@@ -135,15 +224,36 @@
   }
 
   function onPointerUp(e: PointerEvent) {
+    if (edit) {
+      edit = null;
+      return;
+    }
     if (!selecting || !selection) return;
+    if (selection.w < 3 || selection.h < 3) dragStart = null;
+    else if (adjust) {
+      region = selection;
+      dragStart = null;
+    }
     // Copy Text: Shift skips QR codes, for text that sits beside one.
-    if (selection.w >= 3 && selection.h >= 3) finish(selection, mode === "text" && e.shiftKey);
-    else dragStart = null;
+    else finish(selection, mode === "text" && e.shiftKey);
+  }
+
+  function onDoubleClick(e: MouseEvent) {
+    if (partAt(e.clientX, e.clientY) === "move") confirm(e.shiftKey);
+  }
+
+  /** Arrows move the selection by a pixel of the screen; with Shift they resize it. */
+  function nudge(key: string, resize: boolean) {
+    if (!region) return;
+    const step = 1 / pxRatio;
+    const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[key]!;
+    const next = adjusted(resize ? "se" : "move", region, dx, dy);
+    if (next.w >= 1 && next.h >= 1) region = next;
   }
 
   // Live selection: scroll the app under the cursor, not the overlay.
   function onWheel() {
-    if (live && !dragStart) invoke("overlay_pass_scroll");
+    if (live && !dragStart && !edit) invoke("overlay_pass_scroll");
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -151,6 +261,12 @@
     if (e.key === "Escape") {
       if (picking) picking = false;
       else finish(null);
+    } else if (region && e.key === "Enter") {
+      e.preventDefault();
+      confirm(e.shiftKey);
+    } else if (region && !edit && e.key.startsWith("Arrow")) {
+      e.preventDefault();
+      nudge(e.key, e.shiftKey);
     } else if (e.key.toLowerCase() === "c" && canPick && !dragStart && !done && !e.repeat) {
       picking = !picking;
     }
@@ -163,7 +279,7 @@
 
   // Magnifier for pixel-precise selection.
   $effect(() => {
-    if (!loupe || !loaded || live || !selecting || mouse.x < 0) return;
+    if (!loupe || !loaded || live || !showLoupe) return;
     const span = LOUPE / ZOOM;
     paintLoupe(img, (mouse.x - span / 2) * pxRatio, (mouse.y - span / 2) * pxRatio, span * pxRatio, span * pxRatio);
   });
@@ -172,7 +288,7 @@
   async function liveLoupe() {
     const scratch = document.createElement("canvas");
     while (!done) {
-      if (loupe && selecting && mouse.x >= 0) {
+      if (loupe && showLoupe) {
         const span = LOUPE / ZOOM;
         const rect = [
           (mouse.x - span / 2) / viewport.w,
@@ -220,6 +336,9 @@
     ctx.stroke();
   }
 
+  // An adjustable selection at rest has no use for it, and it would hide the buttons.
+  const showLoupe = $derived(selecting && mouse.x >= 0 && (!region || !!edit));
+
   const loupePos = $derived({
     x: mouse.x + 24 + LOUPE > viewport.w ? mouse.x - 24 - LOUPE : mouse.x + 24,
     y: mouse.y + 24 + LOUPE + 28 > viewport.h ? mouse.y - 24 - LOUPE - 28 : mouse.y + 24,
@@ -238,9 +357,14 @@
   });
 
   async function init() {
-    const info = await invoke<{ mode: Mode | "screen" | "record" | "record_gif" | "scroll"; width: number } | null>("overlay_info", { index });
+    const info = await invoke<{
+      mode: Mode | "screen" | "record" | "record_gif" | "scroll";
+      width: number;
+      adjust: boolean;
+    } | null>("overlay_info", { index });
     if (!info) return finish(null);
     imageWidth = info.width;
+    adjust = info.adjust;
     live = info.width === 0;
     if (info.mode === "window" || info.mode === "text") await setMode(info.mode);
     recording = info.mode === "record" || info.mode === "record_gif";
@@ -273,10 +397,12 @@
   class:window-mode={mode === "window"}
   class:picking
   class:live
+  style:cursor
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
   onpointerenter={onPointerEnter}
+  ondblclick={onDoubleClick}
   onwheel={onWheel}
 >
   {#if live === false}
@@ -286,13 +412,34 @@
   {#if box}
     <div class="box" style="left:{box.x}px; top:{box.y}px; width:{box.w}px; height:{box.h}px">
       <span class="size">{Math.round(box.w * pxRatio)} × {Math.round(box.h * pxRatio)}</span>
+      {#if region}
+        {#each ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as part (part)}
+          <i class="handle {part}"></i>
+        {/each}
+      {/if}
     </div>
+    {#if region && toolsPos && !edit}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="tools"
+        style="right:{toolsPos.right}px; top:{toolsPos.top}px"
+        onpointerdown={(e) => e.stopPropagation()}
+        ondblclick={(e) => e.stopPropagation()}
+      >
+        <button title={tr("Cancel")} aria-label={tr("Cancel")} onclick={() => finish(null)}>
+          <svg viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        </button>
+        <button class="ok" title={tr("Capture")} aria-label={tr("Capture")} onclick={(e) => confirm(e.shiftKey)}>
+          <svg viewBox="0 0 16 16"><path d="M3 8.5l3.2 3L13 4.5" /></svg>
+        </button>
+      </div>
+    {/if}
   {:else}
     <div class="dim"></div>
   {/if}
 
-  {#if selecting && mouse.x >= 0}
-    {#if !selection && !picking}
+  {#if showLoupe}
+    {#if !box && !picking}
       <div class="guide h" style="top:{mouse.y}px"></div>
       <div class="guide v" style="left:{mouse.x}px"></div>
     {/if}
@@ -306,7 +453,10 @@
   {/if}
 
   <div class="hint">
-    {#if picking}
+    {#if region}
+      {tr("Drag the edges or the area to adjust")} · <kbd>Enter</kbd> {tr("capture")}
+      {#if mode === "text"}· <kbd>Shift</kbd><kbd>Enter</kbd> {tr("text only, skip QR codes")}{/if}
+    {:else if picking}
       <strong>{tr("Color picker")}</strong> · {tr("Click to copy the color")} · <kbd>C</kbd> {tr("back to selecting")}
     {:else if mode === "text"}
       {tr("Drag over text to copy it")} · <kbd>Shift</kbd> {tr("text only, skip QR codes")}
@@ -364,6 +514,85 @@
     position: absolute;
     outline: 1px solid rgba(255, 255, 255, 0.9);
     box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.3);
+  }
+  .handle {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    margin: -4px 0 0 -4px;
+    background: #fff;
+    border: 1px solid rgba(37, 99, 235, 0.9);
+    border-radius: 2px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+  }
+  .handle.nw,
+  .handle.n,
+  .handle.ne {
+    top: 0;
+  }
+  .handle.w,
+  .handle.e {
+    top: 50%;
+  }
+  .handle.sw,
+  .handle.s,
+  .handle.se {
+    top: 100%;
+  }
+  .handle.nw,
+  .handle.w,
+  .handle.sw {
+    left: 0;
+  }
+  .handle.n,
+  .handle.s {
+    left: 50%;
+  }
+  .handle.ne,
+  .handle.e,
+  .handle.se {
+    left: 100%;
+  }
+  .tools {
+    position: absolute;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: rgba(0, 0, 0, 0.72);
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    cursor: default;
+  }
+  .tools button {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+  }
+  .tools button:hover {
+    background: rgba(255, 255, 255, 0.16);
+  }
+  .tools button.ok {
+    background: rgba(37, 99, 235, 0.95);
+  }
+  .tools button.ok:hover {
+    background: rgb(59, 118, 245);
+  }
+  .tools svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
   .window-mode .box {
     outline: 3px solid rgba(37, 99, 235, 0.9);
