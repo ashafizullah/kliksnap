@@ -55,6 +55,8 @@ const ID: Record<string, string> = {
   "copy color": "salin warna",
   "Scroll works": "Bisa digulir",
   cancel: "batal",
+  capture: "tangkap",
+  "Drag the edges or the area to adjust": "Seret tepi atau areanya untuk menyesuaikan",
 
   // Preview, toast, countdown, recording
   Screenshot: "Tangkapan layar",
@@ -203,6 +205,11 @@ const ID: Record<string, string> = {
     "Video tetap berjalan; gambar diambil saat Anda selesai memilih. Menu yang terbuka bisa tertutup lebih dulu.",
   "The screen freezes when you press the shortcut, so open menus and tooltips stay in the shot.":
     "Layar membeku saat pintasan ditekan, jadi menu dan tooltip yang terbuka ikut tertangkap.",
+  "Adjust the area before capturing": "Sesuaikan area sebelum menangkap",
+  "After you let go, drag the edges to resize or the area to move it, then press Enter. Recordings and scrolling captures always work this way.":
+    "Setelah mouse dilepas, seret tepinya untuk mengubah ukuran atau areanya untuk memindahkan, lalu tekan Enter. Rekaman dan tangkapan gulir selalu bekerja seperti ini.",
+  "Letting go of the mouse captures right away. Recordings and scrolling captures still let you adjust the area first.":
+    "Melepas mouse langsung menangkap. Rekaman dan tangkapan gulir tetap bisa disesuaikan dulu.",
   "After capture": "Setelah menangkap",
   "Copy to clipboard": "Salin ke clipboard",
   AI: "AI",
