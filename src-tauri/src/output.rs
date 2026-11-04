@@ -141,11 +141,18 @@ pub fn unique_path(dir: &Path, name: &str) -> PathBuf {
 
 /// Shows the file selected in Finder, Explorer or the Linux file manager.
 pub fn reveal(path: &Path) -> Result<(), String> {
-    let mut cmd = if cfg!(target_os = "windows") {
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
         let mut c = std::process::Command::new("explorer");
-        c.arg(format!("/select,{}", path.display()));
+        // Explorer only reads `/select,"path"`: `arg` would quote the whole
+        // `"/select,path"` once the path has a space (the default names do),
+        // and Explorer then opens Documents instead. It also needs backslashes.
+        c.raw_arg(select_arg(path));
         c
-    } else if cfg!(target_os = "macos") {
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg("-R").arg(path);
         c
@@ -173,7 +180,14 @@ pub fn reveal(path: &Path) -> Result<(), String> {
     cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// Explorer's argument for showing `path` selected.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn select_arg(path: &Path) -> String {
+    format!("/select,\"{}\"", path.to_string_lossy().replace('/', "\\"))
+}
+
 /// `file://` URI for an absolute path, percent-encoded.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn file_uri(path: &Path) -> String {
     let mut uri = String::from("file://");
     for b in path.to_string_lossy().bytes() {
@@ -261,6 +275,14 @@ mod tests {
         assert_eq!(
             file_name_at("", DEFAULT_RECORDING_TEMPLATE, "mp4", at()),
             "KlikSnap Recording 2026-10-09 at 07.05.03.mp4"
+        );
+    }
+
+    #[test]
+    fn select_arg_quotes_the_path() {
+        assert_eq!(
+            select_arg(Path::new(r"C:\Users\A B\Desktop/KlikSnap Recording 1.mp4")),
+            r#"/select,"C:\Users\A B\Desktop\KlikSnap Recording 1.mp4""#
         );
     }
 

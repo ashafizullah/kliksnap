@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.16.1
+
+### Fixed
+
+- On Windows, Open on the "Recording saved" notification now shows the file in its folder, instead of opening Documents
+
 ## 0.16.0
 
 ### Added
