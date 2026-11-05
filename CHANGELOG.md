@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.16.2
+
+### Fixed
+
+- On Windows, recordings without sound open everywhere again: they no longer carry an empty audio track, which Firefox-based browsers (and WhatsApp Web in them) refused as "file not supported"
+
 ## 0.16.1
 
 ### Fixed
