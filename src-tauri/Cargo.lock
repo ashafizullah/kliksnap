@@ -2523,7 +2523,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kliksnap"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -6037,8 +6037,6 @@ dependencies = [
 [[package]]
 name = "windows-capture"
 version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09046acbe9b6d039cde50e8c8178d95bb0f9b33ed7feccc4465dadc5404b31b4"
 dependencies = [
  "parking_lot",
  "rayon",
