@@ -6,28 +6,45 @@
     COLORS,
     DEFAULT_BACKDROP,
     FILLS,
+    FLIP_H,
+    FLIP_V,
     FONTS,
     FRAMES,
     PADDINGS,
     RADII,
+    ROTATE_LEFT,
+    ROTATE_RIGHT,
     SIZES,
+    UPRIGHT,
+    compose,
     constrain,
     fillCss,
     fontCss,
     nextStep,
     normalize,
     parseBackdrop,
+    turnRect,
     type Backdrop,
     type DragShape,
     type FillId,
     type FontId,
     type FrameId,
+    type Orient,
     type Rect,
     type Scene,
     type Shape,
     type Tool,
   } from "./lib/editor/shapes";
-  import { drawCropMask, drawFrame, drawScene, exportPixels, frameInsets, frameScreenRadii } from "./lib/editor/render";
+  import {
+    drawCropMask,
+    drawFrame,
+    drawScene,
+    exportPixels,
+    frameInsets,
+    frameScreenRadii,
+    turnImage,
+    turnShape,
+  } from "./lib/editor/render";
 
   const id = Number(param("id"));
 
@@ -46,6 +63,12 @@
   ];
   const DRAG_TOOLS = new Set<Tool>(["arrow", "line", "rect", "ellipse", "highlight", "blur", "pixelate"]);
   const mod = isMac ? "⌘" : "Ctrl+";
+  const TURNS: { op: Orient; label: string; d: string }[] = [
+    { op: ROTATE_LEFT, label: "Rotate left", d: "M1.5 3v4.5H6M2.9 11.3a6.5 6.5 0 1 0 1.5-6.8L1.5 7.5" },
+    { op: ROTATE_RIGHT, label: "Rotate right", d: "M16.5 3v4.5H12M15.1 11.3a6.5 6.5 0 1 1-1.5-6.8l2.9 3" },
+    { op: FLIP_H, label: "Flip horizontal", d: "M9 2v14M7 5l-5 8h5zM11 5l5 8h-5z" },
+    { op: FLIP_V, label: "Flip vertical", d: "M2 9h14M5 7l8-5v5zM5 11l8 5v-5z" },
+  ];
 
   let base = $state.raw<HTMLImageElement | null>(null);
   let scale = $state(1);
@@ -98,7 +121,10 @@
     sizes[tool] = Math.min(spec.max, Math.max(spec.min, sizes[tool] + dir * step));
   }
 
-  let scene: Scene = $state.raw({ shapes: [], crop: null, backdrop: parseBackdrop(prefs.backdrop) });
+  let scene: Scene = $state.raw({ shapes: [], crop: null, backdrop: parseBackdrop(prefs.backdrop), orient: UPRIGHT });
+  // The screenshot as turned; only rebuilt when the orientation changes.
+  const orient = $derived(scene.orient);
+  const image = $derived(base ? turnImage(base, orient) : null);
   let past: Scene[] = $state.raw([]);
   let future: Scene[] = $state.raw([]);
   let draft = $state.raw<Shape | null>(null);
@@ -129,6 +155,19 @@
     past = past.slice(0, -1);
   }
 
+  /** Rotates or mirrors the screenshot, taking the annotations and crop along. */
+  function turn(op: Orient) {
+    if (!image) return;
+    if (text) commitText();
+    const { width: w, height: h } = image;
+    commit({
+      ...scene,
+      orient: compose(op, scene.orient),
+      shapes: scene.shapes.map((s) => turnShape(s, op, w, h, scale)),
+      crop: scene.crop && turnRect(op, w, h, scene.crop),
+    });
+  }
+
   function clearAll() {
     text = null;
     if (scene.shapes.length || scene.crop) commit({ ...scene, shapes: [], crop: null });
@@ -138,7 +177,7 @@
 
   /** Pixelates the email addresses, numbers, keys and passwords the OCR finds. */
   async function autoRedact() {
-    if (redacting) return;
+    if (redacting || !base) return;
     redacting = true;
     try {
       const boxes = await invoke<[number, number, number, number][]>("find_sensitive", { id });
@@ -147,15 +186,20 @@
         return;
       }
       const pad = 2 * scale;
-      const shapes: Shape[] = boxes.map(([x, y, w, h]) => ({
-        kind: "pixelate",
-        x1: x - pad,
-        y1: y - pad,
-        x2: x + w + pad,
-        y2: y + h + pad,
-        color,
-        size: sizes.pixelate,
-      }));
+      // The OCR reads the original screenshot, which may since have been turned.
+      const { naturalWidth: bw, naturalHeight: bh } = base;
+      const shapes: Shape[] = boxes.map(([x, y, w, h]) => {
+        const r = turnRect(scene.orient, bw, bh, { x, y, w, h });
+        return {
+          kind: "pixelate",
+          x1: r.x - pad,
+          y1: r.y - pad,
+          x2: r.x + r.w + pad,
+          y2: r.y + r.h + pad,
+          color,
+          size: sizes.pixelate,
+        };
+      });
       commit({ ...scene, shapes: [...scene.shapes, ...shapes] });
       flash(tr("Hid {n} item(s). Check the result, OCR can miss things", { n: boxes.length }));
     } catch (e) {
@@ -179,9 +223,13 @@
   }
 
   function redraw() {
-    if (!base || !canvas) return;
+    if (!image || !canvas) return;
+    if (canvas.width !== image.width || canvas.height !== image.height) {
+      canvas.width = image.width;
+      canvas.height = image.height;
+    }
     const ctx = canvas.getContext("2d")!;
-    drawScene(ctx, base, scene, scale, draft);
+    drawScene(ctx, image, scene, scale, draft);
     const crop = cropDraft ?? scene.crop;
     if (crop) drawCropMask(ctx, crop, scale);
   }
@@ -192,15 +240,15 @@
   });
 
   $effect(() => {
-    void [scene.backdrop?.padding, scene.backdrop?.frame];
+    void [scene.backdrop?.padding, scene.backdrop?.frame, image];
     fit();
   });
 
   // Backdrop preview in CSS pixels; the canvas itself keeps its coordinates.
   const preview = $derived.by(() => {
     const b = scene.backdrop;
-    if (!b || !base) return null;
-    const k = (view.w / base.naturalWidth) * scale;
+    if (!b || !image) return null;
+    const k = (view.w / image.width) * scale;
     const pad = b.padding * k;
     const radius = b.radius * k;
     const framed = b.frame !== "none";
@@ -239,8 +287,8 @@
   });
 
   function fit() {
-    if (!base) return;
-    const natural = { w: base.naturalWidth / scale, h: base.naturalHeight / scale };
+    if (!image) return;
+    const natural = { w: image.width / scale, h: image.height / scale };
     const pad = 2 * (scene.backdrop?.padding ?? 0);
     const inset = frameInsets(scene.backdrop?.frame ?? "none", natural.w, 1);
     const k = Math.min(
@@ -262,7 +310,7 @@
   }
 
   async function onPointerDown(e: PointerEvent) {
-    if (e.button !== 0 || !base) return;
+    if (e.button !== 0 || !image) return;
     // Keep the browser from moving focus to <body>, which would blur the text box.
     e.preventDefault();
     backdropPanel = false;
@@ -348,7 +396,7 @@
   }
 
   // Display ratio between CSS pixels and image pixels.
-  const ratio = $derived(base && view.w ? view.w / base.naturalWidth : 1);
+  const ratio = $derived(image && view.w ? view.w / image.width : 1);
   const textFontPx = $derived(sizes.text * scale * ratio);
   const textWidth = $derived.by(() => {
     if (!text) return 0;
@@ -362,10 +410,10 @@
   let shareButton = $state<HTMLButtonElement>();
 
   async function exportImage(action: "copy" | "save" | "saveas" | "savecopy" | "pin" | "share" | "explain") {
-    if (!base) return;
+    if (!image) return;
     if (text) commitText();
     try {
-      const { bytes, width, height } = exportPixels(base, scene, scale);
+      const { bytes, width, height } = exportPixels(image, scene, scale);
       const r = shareButton?.getBoundingClientRect();
       const anchor = action === "share" && r ? [r.left, r.top, r.width, r.height] : null;
       const path = await invoke<string | null>("export_image", bytes, {
@@ -419,8 +467,6 @@
       if (!info) return closeWindow();
       scale = info.scale || 1;
       base = await loadImage(imageUrl(`shot-${id}`));
-      canvas.width = base.naturalWidth;
-      canvas.height = base.naturalHeight;
       fit();
       redraw();
       observer = new ResizeObserver(fit);
@@ -465,6 +511,14 @@
           aria-pressed={color === c}
           onclick={() => (color = c)}
         ></button>
+      {/each}
+    </div>
+
+    <div class="group" role="toolbar" aria-label={tr("Rotate and flip")}>
+      {#each TURNS as t (t.label)}
+        <button class="icon" title={tr(t.label)} aria-label={tr(t.label)} disabled={!image} onclick={() => turn(t.op)}>
+          <svg viewBox="0 0 18 18"><path d={t.d} /></svg>
+        </button>
       {/each}
     </div>
 

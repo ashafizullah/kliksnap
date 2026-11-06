@@ -45,7 +45,45 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** Padding, corners, shadow and a device frame around the exported image; sizes in logical px. */
 export type Backdrop = { fill: FillId; padding: number; radius: number; shadow: boolean; frame: FrameId };
 
-export type Scene = { shapes: Shape[]; crop: Rect | null; backdrop: Backdrop | null };
+/**
+ * How the screenshot is turned: a point x, y measured from the center of the
+ * original goes to a·x + b·y, c·x + d·y from the center of the turned image.
+ * Each entry is -1, 0 or 1, so this covers every quarter turn and mirror.
+ */
+export type Orient = [a: number, b: number, c: number, d: number];
+
+export const UPRIGHT: Orient = [1, 0, 0, 1];
+export const ROTATE_LEFT: Orient = [0, 1, -1, 0];
+export const ROTATE_RIGHT: Orient = [0, -1, 1, 0];
+export const FLIP_H: Orient = [-1, 0, 0, 1];
+export const FLIP_V: Orient = [1, 0, 0, -1];
+
+/** `then` applied after `first`. */
+export function compose(then: Orient, first: Orient): Orient {
+  const [a, b, c, d] = then;
+  const [e, f, g, h] = first;
+  return [a * e + b * g, a * f + b * h, c * e + d * g, c * f + d * h];
+}
+
+/** The size of a `w`×`h` image once turned by `m`. */
+export const turnedSize = (m: Orient, w: number, h: number) => (m[1] ? { w: h, h: w } : { w, h });
+
+/** Where point `x, y` of a `w`×`h` image lands once the image is turned by `m`. */
+export function turnPoint(m: Orient, w: number, h: number, x: number, y: number): [number, number] {
+  const t = turnedSize(m, w, h);
+  const px = x - w / 2;
+  const py = y - h / 2;
+  return [m[0] * px + m[1] * py + t.w / 2, m[2] * px + m[3] * py + t.h / 2];
+}
+
+export function turnRect(m: Orient, w: number, h: number, r: Rect): Rect {
+  const [x1, y1] = turnPoint(m, w, h, r.x, r.y);
+  const [x2, y2] = turnPoint(m, w, h, r.x + r.w, r.y + r.h);
+  return normalize(x1, y1, x2, y2);
+}
+
+/** Shapes and crop are in the coordinates of the image as turned by `orient`. */
+export type Scene = { shapes: Shape[]; crop: Rect | null; backdrop: Backdrop | null; orient: Orient };
 
 /** Backdrop fills: one stop is a solid color, two or more a diagonal gradient, none transparent. */
 export const FILLS = {
