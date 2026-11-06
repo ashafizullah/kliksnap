@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.17.1
+
+### Changed
+
+- The editor keeps its tools at the top and moves Share, Explain, Pin, Save and Copy to a bar at the bottom, so the toolbar is less crowded
+
 ## 0.17.0
 
 ### Added
