@@ -1,6 +1,69 @@
-import { FILLS, badgeText, fontCss, normalize, type Backdrop, type FrameId, type Rect, type Scene, type Shape } from "./shapes";
+import {
+  FILLS,
+  badgeText,
+  fontCss,
+  normalize,
+  turnPoint,
+  turnedSize,
+  type Backdrop,
+  type FrameId,
+  type Orient,
+  type Rect,
+  type Scene,
+  type Shape,
+  type TextShape,
+} from "./shapes";
 
 let scratch: HTMLCanvasElement | null = null;
+let measurer: CanvasRenderingContext2D | null = null;
+
+/** `base` turned by `m`, as a canvas the size of the result. */
+export function turnImage(base: HTMLImageElement, m: Orient): HTMLCanvasElement {
+  const w = base.naturalWidth;
+  const h = base.naturalHeight;
+  const t = turnedSize(m, w, h);
+  const canvas = document.createElement("canvas");
+  canvas.width = t.w;
+  canvas.height = t.h;
+  const ctx = canvas.getContext("2d")!;
+  ctx.setTransform(m[0], m[2], m[1], m[3], t.w / 2, t.h / 2);
+  ctx.drawImage(base, -w / 2, -h / 2);
+  return canvas;
+}
+
+/** The size of the box a text shape covers, in image pixels. */
+function textBox(s: TextShape, scale: number) {
+  measurer ??= document.createElement("canvas").getContext("2d")!;
+  const size = s.size * scale;
+  measurer.font = fontCss(s.font, s.bold, size);
+  const lines = s.text.split("\n");
+  return { w: Math.max(...lines.map((l) => measurer!.measureText(l).width)), h: lines.length * size * 1.25 };
+}
+
+/**
+ * Moves a shape along with a `w`×`h` image that is turned by `m`. Text keeps
+ * reading upright: only its box moves.
+ */
+export function turnShape(s: Shape, m: Orient, w: number, h: number, scale: number): Shape {
+  const at = (x: number, y: number) => turnPoint(m, w, h, x, y);
+  if (s.kind === "pen") {
+    const points: number[] = [];
+    for (let i = 0; i < s.points.length; i += 2) points.push(...at(s.points[i], s.points[i + 1]));
+    return { ...s, points };
+  }
+  if (s.kind === "step") {
+    const [x, y] = at(s.x, s.y);
+    return { ...s, x, y };
+  }
+  if (s.kind === "text") {
+    const box = textBox(s, scale);
+    const [cx, cy] = at(s.x + box.w / 2, s.y + box.h / 2);
+    return { ...s, x: cx - box.w / 2, y: cy - box.h / 2 };
+  }
+  const [x1, y1] = at(s.x1, s.y1);
+  const [x2, y2] = at(s.x2, s.y2);
+  return { ...s, x1, y1, x2, y2 };
+}
 
 function pixelate(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rect, block: number) {
   if (r.w < 1 || r.h < 1) return;
@@ -125,7 +188,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
 
 export function drawScene(
   ctx: CanvasRenderingContext2D,
-  base: HTMLImageElement,
+  base: HTMLCanvasElement,
   scene: Scene,
   scale: number,
   extra: Shape | null = null,
@@ -380,8 +443,8 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w
 }
 
 /** Renders the final image (annotations applied, crop and backdrop honored) as RGBA bytes. */
-export function exportPixels(base: HTMLImageElement, scene: Scene, scale: number) {
-  const full = { x: 0, y: 0, w: base.naturalWidth, h: base.naturalHeight };
+export function exportPixels(base: HTMLCanvasElement, scene: Scene, scale: number) {
+  const full = { x: 0, y: 0, w: base.width, h: base.height };
   const c = scene.crop ?? full;
   const r = {
     x: Math.max(0, Math.round(c.x)),
