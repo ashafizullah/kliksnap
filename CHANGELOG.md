@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.17.0
+
+### Added
+
+- Rotate and flip screenshots in the editor: turn the image left or right, or mirror it horizontally or vertically. Annotations and the crop move along, and text stays upright
+
 ## 0.16.2
 
 ### Fixed
