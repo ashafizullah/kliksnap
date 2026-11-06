@@ -652,27 +652,6 @@
       </div>
     {/if}
 
-    <div class="spacer"></div>
-
-    <div class="group actions">
-      <!-- Linux has no system share sheet. -->
-      {#if !isLinux}
-        <button
-          bind:this={shareButton}
-          title={isMac ? tr("Share (AirDrop, Messages, Mail…)") : tr("Share")}
-          onclick={() => exportImage("share")}
-        >
-          {tr("Share")}
-        </button>
-      {/if}
-      <!-- Explains the image with its annotations, which can point the AI at what matters. -->
-      <button title={tr("Explain with AI")} onclick={() => exportImage("explain")}>{tr("Explain")}</button>
-      <button title="{tr('Keep on screen')} ({mod}P)" onclick={() => exportImage("pin")}>{tr("Pin")}</button>
-      <button title="{tr('Save As…')} ({mod}⇧S)" onclick={() => exportImage("saveas")}>{tr("Save As…")}</button>
-      <button title="{tr('Save')} ({mod}S)" onclick={() => exportImage("save")}>{tr("Save")}</button>
-      <button title="{tr('Save & Copy')} ({mod}⇧C)" onclick={() => exportImage("savecopy")}>{tr("Save & Copy")}</button>
-      <button class="primary" title="{tr('Copy')} ({mod}C)" onclick={() => exportImage("copy")}>{tr("Copy")}</button>
-    </div>
   </header>
 
   <main bind:this={stage}>
@@ -724,6 +703,28 @@
       <div class="status" role="status">{status}</div>
     {/if}
   </main>
+
+  <footer>
+    <div class="group actions">
+      <!-- Linux has no system share sheet. -->
+      {#if !isLinux}
+        <button
+          bind:this={shareButton}
+          title={isMac ? tr("Share (AirDrop, Messages, Mail…)") : tr("Share")}
+          onclick={() => exportImage("share")}
+        >
+          {tr("Share")}
+        </button>
+      {/if}
+      <!-- Explains the image with its annotations, which can point the AI at what matters. -->
+      <button title={tr("Explain with AI")} onclick={() => exportImage("explain")}>{tr("Explain")}</button>
+      <button title="{tr('Keep on screen')} ({mod}P)" onclick={() => exportImage("pin")}>{tr("Pin")}</button>
+      <button title="{tr('Save As…')} ({mod}⇧S)" onclick={() => exportImage("saveas")}>{tr("Save As…")}</button>
+      <button title="{tr('Save')} ({mod}S)" onclick={() => exportImage("save")}>{tr("Save")}</button>
+      <button title="{tr('Save & Copy')} ({mod}⇧C)" onclick={() => exportImage("savecopy")}>{tr("Save & Copy")}</button>
+      <button class="primary" title="{tr('Copy')} ({mod}C)" onclick={() => exportImage("copy")}>{tr("Copy")}</button>
+    </div>
+  </footer>
 </div>
 
 <style>
@@ -746,8 +747,12 @@
     align-items: center;
     gap: 2px;
   }
-  .spacer {
-    flex: 1;
+  footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 12px;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
   }
   button {
     border: 0;
