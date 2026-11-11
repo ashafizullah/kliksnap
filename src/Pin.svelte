@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { closeWindow, imageUrl, invoke, isMac, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
@@ -70,9 +70,11 @@
   }
 
   onMount(() => {
+    // This window's own events only: a plain `listen` hears every pin's.
+    const win = getCurrentWebviewWindow();
     const off = [
-      listen<number>("pin:opacity", (e) => setOpacity(e.payload)),
-      listen<boolean>("pin:click-through", (e) => {
+      win.listen<number>("pin:opacity", (e) => setOpacity(e.payload)),
+      win.listen<boolean>("pin:click-through", (e) => {
         if (e.payload && opacity === 1) opacity = 0.6;
         const through = isMac
           ? "Clicks pass through · undo from the menu bar icon"

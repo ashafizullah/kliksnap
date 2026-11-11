@@ -3,6 +3,26 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.17.2
+
+### Fixed
+
+- Pressing Record twice during the countdown no longer starts two recordings, and quitting while recording finishes the file first, so it plays
+- Recording an area that starts at the very edge of a screen no longer fails silently, and a recording that fails to start leaves no empty file behind
+- A shortcut another app already holds no longer turns off all the other shortcuts
+- Opacity and Click Through on one pinned image no longer change the other pins, and stacked previews no longer share one hover state
+- When auto-save fails (the folder is gone, say), the screenshot is still copied and kept in History, and a notice says it wasn't saved
+- Save As keeps a name with a dot in it: "report v1.2" is saved as "report v1.2.png", not "report v1.png"
+- Settings recovers after a change is rejected, instead of failing every later change
+- A scrolling capture can no longer be left running with no way to stop it
+- A notice shown while another is still open now replaces it, instead of not appearing
+- In the editor, a Shift-constrained crop that reaches past the image now saves exactly what the crop shows
+- In History, Delete no longer removes a capture the search has hidden
+- AI answers show inline code such as `handlers[i](event)` as written
+- Dragging a selection onto another screen and holding still no longer snaps it to the corner
+- On Windows, Copy Text says so when no language with text recognition is installed
+- On Linux, long GIF recordings no longer run out of memory, and ffmpeg's own error is shown when a recording fails
+
 ## 0.17.1
 
 ### Changed

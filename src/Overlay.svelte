@@ -214,9 +214,11 @@
   // can lag behind the overlay showing, nor while the wheel passes through.
   // Until they flow, follow the cursor from Rust so the guides still show.
   async function followCursor() {
-    if (done || performance.now() - lastMove < 150) return;
+    // Not during a drag either: the pointer is captured, so its events are
+    // the truth even when the cursor is held still on another monitor.
+    if (done || dragStart || edit || performance.now() - lastMove < 150) return;
     const p = await invoke<[number, number] | null>("overlay_cursor", { index });
-    if (performance.now() - lastMove < 150) return;
+    if (dragStart || edit || performance.now() - lastMove < 150) return;
     // Off this monitor: hide the guides here, they show on the cursor's monitor.
     mouse = p ? { x: p[0] * viewport.w, y: p[1] * viewport.h } : { x: -1, y: -1 };
     // On it, without pointer events yet: take the keyboard here as well.

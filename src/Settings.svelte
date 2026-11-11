@@ -285,6 +285,9 @@
       setTimeout(() => (saved = false), 1200);
     } catch (e) {
       error = String(e);
+      // Back to what is really saved, or every later save would resend
+      // the rejected value and fail the same way.
+      s = await invoke<Settings>("get_settings");
     }
   }
 

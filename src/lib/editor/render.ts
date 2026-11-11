@@ -446,11 +446,14 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w
 export function exportPixels(base: HTMLCanvasElement, scene: Scene, scale: number) {
   const full = { x: 0, y: 0, w: base.width, h: base.height };
   const c = scene.crop ?? full;
+  // The part of the crop on the image.
+  const x = Math.max(0, Math.round(c.x));
+  const y = Math.max(0, Math.round(c.y));
   const r = {
-    x: Math.max(0, Math.round(c.x)),
-    y: Math.max(0, Math.round(c.y)),
-    w: Math.round(Math.min(c.w, full.w - c.x)),
-    h: Math.round(Math.min(c.h, full.h - c.y)),
+    x,
+    y,
+    w: Math.max(1, Math.min(full.w, Math.round(c.x + c.w)) - x),
+    h: Math.max(1, Math.min(full.h, Math.round(c.y + c.h)) - y),
   };
   const canvas = document.createElement("canvas");
   canvas.width = r.w;

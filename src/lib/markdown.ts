@@ -130,7 +130,8 @@ function alignOf(cell: Part[]): Align {
 }
 
 function inline(text: string): Part[] {
-  text = text.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  // Links and images keep their text only; inline code is left as written.
+  text = text.replace(/(`[^`]+`)|!?\[([^\]]*)\]\([^)]*\)/g, (_, code, label) => code ?? label);
   const parts: Part[] = [];
   for (const piece of text.split(/(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|\*[^*\s][^*]*\*)/)) {
     if (!piece) continue;

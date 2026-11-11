@@ -83,7 +83,8 @@
   function followUp() {
     const text = draft.trim();
     const chat = chats[action];
-    if (!text || asking || !chat) return;
+    // Nothing to follow up on until the action itself has been answered.
+    if (!text || asking || !chat || !chat.some((m) => m.role === "assistant")) return;
     // A question whose answer failed is replaced: models expect turns to alternate.
     if (chat.length > 1 && chat[chat.length - 1].role === "user") chat.pop();
     chat.push({ role: "user", content: text });

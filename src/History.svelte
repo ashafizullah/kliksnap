@@ -21,6 +21,11 @@
     return entries.filter((e) => e.text.toLowerCase().includes(q));
   });
 
+  // A capture the search has hidden can't be acted on from the keyboard.
+  $effect(() => {
+    if (selected && !shown.some((e) => e.id === selected)) selected = null;
+  });
+
   function flash(text: string) {
     status = text;
     clearTimeout(statusTimer);

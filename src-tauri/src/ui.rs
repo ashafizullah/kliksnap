@@ -255,12 +255,33 @@ const TOAST_W: f64 = 300.0;
 const TOAST_H: f64 = 76.0;
 const TOAST_TALL_H: f64 = 84.0;
 
+/// The thread the windows live on, set at startup.
+pub static MAIN_THREAD: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+
+/// Closes the window `label` so another can take its place. The label is
+/// only free once the main thread has seen the window go, so this waits for
+/// that; on the main thread itself it can't, and the caller's build fails.
+fn close_old(app: &AppHandle, label: &str) -> tauri::Result<()> {
+    let Some(old) = app.get_webview_window(label) else {
+        return Ok(());
+    };
+    old.destroy()?;
+    if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+        return Ok(());
+    }
+    let started = std::time::Instant::now();
+    while app.get_webview_window(label).is_some()
+        && started.elapsed() < std::time::Duration::from_secs(1)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    Ok(())
+}
+
 /// Shows the OCR result notice in the bottom-right corner, replacing any open one.
 pub fn show_toast(app: &AppHandle, b: &Bounds, tall: bool) -> tauri::Result<()> {
     let h = if tall { TOAST_TALL_H } else { TOAST_H };
-    if let Some(old) = app.get_webview_window("toast") {
-        old.destroy()?;
-    }
+    close_old(app, "toast")?;
     let area = work_area(app, b);
     let win = WebviewWindowBuilder::new(app, "toast", WebviewUrl::App("toast.html".into()))
         .title("KlikSnap")
@@ -293,9 +314,7 @@ pub fn show_countdown(
     secs: u32,
     center: Option<(f64, f64)>,
 ) -> tauri::Result<WebviewWindow> {
-    if let Some(old) = app.get_webview_window("countdown") {
-        old.destroy()?;
-    }
+    close_old(app, "countdown")?;
     let area = work_area(app, b);
     let url = format!("countdown.html?s={secs}");
     let win = WebviewWindowBuilder::new(app, "countdown", WebviewUrl::App(url.into()))
@@ -332,9 +351,7 @@ const SCROLL_H: f64 = 48.0;
 /// Shows the scrolling capture's controls next to `rect` (fractions of the
 /// monitor at `b`): under it if there's room, else above it, else inside.
 pub fn show_scroll(app: &AppHandle, b: &Bounds, rect: [f64; 4]) -> tauri::Result<()> {
-    if let Some(old) = app.get_webview_window("scroll") {
-        old.destroy()?;
-    }
+    close_old(app, "scroll")?;
     let area = work_area(app, b);
     let [fx, fy, fw, fh] = rect;
     let (rx, ry) = (b.x as f64 + fx * b.w as f64, b.y as f64 + fy * b.h as f64);
@@ -380,9 +397,7 @@ const RECORDING_H: f64 = 44.0;
 /// Shows the recording's timer and Stop button in the bottom-right corner,
 /// with `shortcut` (an accelerator, or empty) as the other way to stop.
 pub fn show_recording(app: &AppHandle, b: &Bounds, shortcut: &str) -> tauri::Result<()> {
-    if let Some(old) = app.get_webview_window("recording") {
-        old.destroy()?;
-    }
+    close_old(app, "recording")?;
     let area = work_area(app, b);
     // Room for the shortcut: ⌥⇧R on macOS, "Alt + Shift + R" elsewhere.
     let w = match shortcut {
@@ -414,9 +429,7 @@ pub fn show_recording(app: &AppHandle, b: &Bounds, shortcut: &str) -> tauri::Res
 /// Shows a click-through window over the whole monitor that draws the
 /// clicks during a recording, so they are recorded too.
 pub fn show_clicks(app: &AppHandle, b: &Bounds) -> tauri::Result<WebviewWindow> {
-    if let Some(old) = app.get_webview_window("clicks") {
-        old.destroy()?;
-    }
+    close_old(app, "clicks")?;
     let area = Area {
         x: b.x as f64,
         y: b.y as f64,
@@ -509,9 +522,7 @@ pub fn show_camera(
     rect: [f64; 4],
     s: &crate::settings::Settings,
 ) -> tauri::Result<(WebviewWindow, CameraLayout)> {
-    if let Some(old) = app.get_webview_window("camera") {
-        old.destroy()?;
-    }
+    close_old(app, "camera")?;
     let area = Area {
         x: b.x as f64,
         y: b.y as f64,
@@ -730,9 +741,7 @@ pub fn open_editor(
 
 /// The update offer, replacing an open one.
 pub fn open_update(app: &AppHandle) -> tauri::Result<()> {
-    if let Some(old) = app.get_webview_window("update") {
-        old.destroy()?;
-    }
+    close_old(app, "update")?;
     WebviewWindowBuilder::new(app, "update", WebviewUrl::App("update.html".into()))
         .title("KlikSnap")
         .inner_size(480.0, 360.0)
