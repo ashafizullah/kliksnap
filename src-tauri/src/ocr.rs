@@ -440,7 +440,18 @@ mod imp {
             img.height() as i32,
             BitmapAlphaMode::Premultiplied,
         )?;
-        let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
+        // No engine and no error code: none of the user's languages can be read.
+        let engine = OcrEngine::TryCreateFromUserProfileLanguages().map_err(|e| {
+            if e.code().is_ok() {
+                windows::core::Error::new(
+                    windows::core::HRESULT(0x80004005_u32 as i32),
+                    "no language with text recognition is installed: add one in \
+                     Windows Settings → Time & language → Language & region",
+                )
+            } else {
+                e
+            }
+        })?;
         let result = engine.RecognizeAsync(&bitmap)?.join()?;
         Ok((result, k))
     }

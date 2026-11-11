@@ -57,6 +57,8 @@ pub struct AppState {
     hotkeys: Mutex<Vec<(Shortcut, Mode)>>,
     toast: Mutex<Toast>,
     recording: Mutex<Option<Recording>>,
+    /// A recording is between its countdown and its first frame.
+    starting: AtomicBool,
     /// The scrolling capture in progress.
     scroll: Mutex<Option<ScrollSession>>,
     /// Pins that let clicks through to the windows below, by window label.
@@ -111,6 +113,7 @@ impl AppState {
             hotkeys: Mutex::default(),
             toast: Mutex::default(),
             recording: Mutex::default(),
+            starting: AtomicBool::new(false),
             click_through: Mutex::default(),
             scroll: Mutex::default(),
         }
@@ -167,6 +170,12 @@ pub fn start_capture(app: &AppHandle, mode: Mode) {
         && state.recording.lock().unwrap().is_some()
     {
         stop_recording(app);
+        return;
+    }
+    // One is already counting down; a second would replace it unstopped.
+    if matches!(mode, Mode::Record | Mode::RecordScreen | Mode::RecordGif)
+        && state.starting.load(Ordering::SeqCst)
+    {
         return;
     }
     if state.busy.swap(true, Ordering::SeqCst) {
@@ -445,13 +454,34 @@ fn show_toast(app: &AppHandle, toast: Toast, bounds: &Bounds) -> Result<(), Stri
     // A saved file's notice has one more line: where to click to see it.
     let tall = !toast.path.is_empty();
     *app.state::<AppState>().toast.lock().unwrap() = toast;
-    ui::show_toast(app, bounds, tall).map_err(|e| e.to_string())
+    // Never on the main thread, which some callers are on: an open toast
+    // can't be replaced from there, and on Windows building a window from a
+    // synchronous command deadlocks.
+    let (app, bounds) = (app.clone(), *bounds);
+    std::thread::spawn(move || {
+        if let Err(e) = ui::show_toast(&app, &bounds, tall) {
+            eprintln!("toast: {e}");
+        }
+    });
+    Ok(())
 }
 
 /// Starts recording `rect` (fractions of the monitor at `bounds`) into the
 /// save folder, as a GIF if `gif`, with a Stop control in the corner.
 fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
     let state = app.state::<AppState>();
+    // Only one at a time: `recording` is not set until the countdown is over.
+    if state.recording.lock().unwrap().is_some() || state.starting.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    struct Starting(AppHandle);
+    impl Drop for Starting {
+        fn drop(&mut self) {
+            let state = self.0.state::<AppState>();
+            state.starting.store(false, Ordering::SeqCst);
+        }
+    }
+    let _starting = Starting(app.clone());
     let settings = state.settings();
     let supported = cfg!(any(target_os = "macos", target_os = "windows"));
     // Before the countdown, so the camera has warmed up and can be moved
@@ -509,6 +539,8 @@ fn start_recording(app: &AppHandle, bounds: Bounds, rect: [f64; 4], gif: bool) {
             )
         });
     if started.is_err() {
+        // Whatever the failed start left of the file; the name was unused before.
+        let _ = std::fs::remove_file(&path);
         for win in [&clicks, &camera].into_iter().flatten() {
             let _ = win.destroy();
         }
@@ -591,12 +623,19 @@ struct ScrollProgress {
 /// Blocking: call off the main thread.
 fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(), String> {
     let state = app.state::<AppState>();
+    // One at a time: they share the controls window and the stop flag.
     let session = ScrollSession {
         stop: Arc::default(),
         controls: Arc::default(),
     };
     let (stop, controls) = (session.stop.clone(), session.controls.clone());
-    *state.scroll.lock().unwrap() = Some(session);
+    {
+        let mut slot = state.scroll.lock().unwrap();
+        if slot.is_some() {
+            return Ok(());
+        }
+        *slot = Some(session);
+    }
     let result = (|| -> Result<stitch::Stitcher, String> {
         ui::show_scroll(app, &bounds, rect).map_err(|e| e.to_string())?;
         // macOS captures what is below the controls, so it needs their window number.
@@ -662,6 +701,11 @@ fn scroll_capture(app: &AppHandle, bounds: Bounds, rect: [f64; 4]) -> Result<(),
         }
         while stop.load(Ordering::SeqCst) == 0 {
             std::thread::sleep(Duration::from_millis(40));
+            // Closed some other way than its buttons: nothing can end this now.
+            if app.get_webview_window("scroll").is_none() {
+                stop.store(SCROLL_CANCEL, Ordering::SeqCst);
+                break;
+            }
             let Some(frame) = grab() else { continue };
             let step = stitcher.push(&frame);
             report(&mut progress, &step, stitcher.height());
@@ -768,11 +812,9 @@ const MIC_SETTINGS: &str = "Allow KlikSnap in System Settings → Privacy & Secu
 const SCREEN_SETTINGS: &str =
     "Turn KlikSnap on in Privacy & Security → Screen Recording, or remove it (−) and add it again.";
 
-/// Stops the recording, finishes the file and says where it went.
-pub fn stop_recording(app: &AppHandle) {
-    let Some(rec) = app.state::<AppState>().recording.lock().unwrap().take() else {
-        return;
-    };
+/// Takes the recording in progress, closing its windows; the caller stops it.
+fn take_recording(app: &AppHandle) -> Option<Recording> {
+    let rec = app.state::<AppState>().recording.lock().unwrap().take()?;
     remember_camera(app, &rec);
     if let Some(z) = &rec.zoom {
         z.stop();
@@ -782,6 +824,29 @@ pub fn stop_recording(app: &AppHandle) {
             let _ = win.destroy();
         }
     }
+    Some(rec)
+}
+
+/// Quits, finishing a recording in progress first so its file can be played.
+pub fn quit(app: &AppHandle) {
+    let Some(rec) = take_recording(app) else {
+        app.exit(0);
+        return;
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = rec.recorder.stop() {
+            eprintln!("recording: {e}");
+        }
+        app.exit(0);
+    });
+}
+
+/// Stops the recording, finishes the file and says where it went.
+pub fn stop_recording(app: &AppHandle) {
+    let Some(rec) = take_recording(app) else {
+        return;
+    };
     tray::refresh(app);
     let app = app.clone();
     std::thread::spawn(move || {
@@ -1055,9 +1120,17 @@ fn finish_shot(
     // takes the lock in `on_window_destroyed`.
     let previews = state.previews.lock().unwrap().clone();
     ui::stack_previews(app, &previews, &bounds);
+    // A save that fails (the folder is gone, say) must not cost the copy
+    // and the history entry below.
     if s.auto_save {
         let path = output::unique_path(&s.save_dir(app), &s.file_name());
-        output::save(&img, &path, s.format())?;
+        if let Err(e) = output::save(&img, &path, s.format()) {
+            let toast = Toast {
+                title: format!("{}: {e}", i18n::tr("Couldn't save the screenshot")),
+                ..Default::default()
+            };
+            let _ = show_toast(app, toast, &bounds);
+        }
     }
     if s.history_limit > 0 {
         let (app, img, limit) = (app.clone(), img.clone(), s.history_limit);
@@ -1216,6 +1289,7 @@ pub fn run() {
             });
         })
         .setup(|app| {
+            let _ = ui::MAIN_THREAD.set(std::thread::current().id());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let (s, first_run) = settings::load(app.handle());

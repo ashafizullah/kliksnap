@@ -121,10 +121,16 @@ pub struct Region {
 
 pub fn region(b: &Bounds, [fx, fy, fw, fh]: [f64; 4], percent: u32) -> Region {
     let (bw, bh) = (b.w as f64, b.h as f64);
-    let x = (fx * bw).round().clamp(0.0, bw);
-    let y = (fy * bh).round().clamp(0.0, bh);
-    let w = (fw * bw).round().clamp(2.0, bw - x);
-    let h = (fh * bh).round().clamp(2.0, bh - y);
+    // The part of the selection on this monitor, at least 2 wide and high:
+    // a drag may run past an edge, or start on the last pixel before it.
+    let span = |from: f64, len: f64, max: f64| {
+        let start = (from * max).round().clamp(0.0, max);
+        let end = ((from + len) * max).round().clamp(0.0, max);
+        let size = (end - start).max(2.0).min(max);
+        (start.min(max - size), size)
+    };
+    let (x, w) = span(fx, fw, bw);
+    let (y, h) = span(fy, fh, bh);
     // xcap space is points on macOS, pixels elsewhere.
     let k = percent.clamp(10, 100) as f64 / 100.0;
     let px = if cfg!(target_os = "macos") {
@@ -1886,6 +1892,7 @@ mod imp {
     use std::io::{Read, Write};
     use std::path::Path;
     use std::process::{Child, Command, Stdio};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use super::{Audio, Region};
@@ -1894,6 +1901,8 @@ mod imp {
 
     pub struct Recorder {
         child: Child,
+        /// What ffmpeg wrote to stderr, for the notice when it fails.
+        errors: Arc<Mutex<String>>,
     }
 
     pub fn microphone_allowed() -> bool {
@@ -1925,16 +1934,33 @@ mod imp {
                 }
                 _ => e.to_string(),
             })?;
+            // Read as it comes: left unread, a full pipe would stall ffmpeg
+            // in the middle of a long recording.
+            let errors = Arc::new(Mutex::new(String::new()));
+            if let Some(mut pipe) = child.stderr.take() {
+                let errors = errors.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 4096];
+                    while let Ok(n) = pipe.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        let mut kept = errors.lock().unwrap();
+                        if kept.len() < 8192 {
+                            kept.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        }
+                    }
+                });
+            }
             // A bad display, region or sound device ends ffmpeg right away.
             std::thread::sleep(Duration::from_millis(600));
             if let Ok(Some(_)) = child.try_wait() {
-                let mut err = String::new();
-                if let Some(mut s) = child.stderr.take() {
-                    let _ = s.read_to_string(&mut err);
-                }
-                return Err(format!("ffmpeg: {}", err.trim()));
+                // Let the reader take in the last of it.
+                std::thread::sleep(Duration::from_millis(50));
+                let err = errors.lock().unwrap().trim().to_string();
+                return Err(format!("ffmpeg: {err}"));
             }
-            Ok(Recorder { child })
+            Ok(Recorder { child, errors })
         }
 
         pub fn stop(mut self) -> Result<(), String> {
@@ -1946,7 +1972,14 @@ mod imp {
             while Instant::now() < deadline {
                 match self.child.try_wait() {
                     Ok(Some(status)) if status.success() => return Ok(()),
-                    Ok(Some(status)) => return Err(format!("ffmpeg ended with {status}")),
+                    Ok(Some(status)) => {
+                        let err = self.errors.lock().unwrap().trim().to_string();
+                        return Err(if err.is_empty() {
+                            format!("ffmpeg ended with {status}")
+                        } else {
+                            format!("ffmpeg ended with {status}: {err}")
+                        });
+                    }
                     Ok(None) => std::thread::sleep(Duration::from_millis(50)),
                     Err(e) => return Err(e.to_string()),
                 }
@@ -1987,8 +2020,11 @@ mod imp {
         if super::is_gif(path) {
             a.extend([
                 "-filter_complex".into(),
+                // A palette per frame: one palette for the whole GIF would
+                // make ffmpeg hold every frame in memory until the end.
                 format!(
-                    "[0:v]fps={},scale={w}:{h}:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse",
+                    "[0:v]fps={},scale={w}:{h}:flags=lanczos,split[a][b];\
+                     [a]palettegen=stats_mode=single[p];[b][p]paletteuse=new=1",
                     crate::gif_writer::FPS
                 ),
                 "-an".into(),
@@ -2064,7 +2100,10 @@ mod imp {
             assert!(a.contains(&graph), "{a}");
             assert!(a.ends_with("/tmp/a.mp4"));
             let gif = args(&b, r, Path::new("/tmp/a.gif"), Audio::default(), true, ":1").join(" ");
-            assert!(gif.contains("palettegen") && gif.contains("-an"), "{gif}");
+            assert!(
+                gif.contains("palettegen=stats_mode=single") && gif.contains("-an"),
+                "{gif}"
+            );
         }
     }
 }
@@ -2091,6 +2130,12 @@ mod tests {
         assert_eq!(r.px_h % 2, 0);
         let r = region(&bounds(1.0), [0.9, 0.9, 0.5, 0.5], 100);
         assert!(r.x + r.w <= 1000.0 && r.y + r.h <= 600.0);
+        // Started on the last pixel: still 2 wide, and inside.
+        let r = region(&bounds(1.0), [0.9995, 0.999, 0.3, 0.3], 100);
+        assert_eq!((r.x, r.y, r.w, r.h), (998.0, 598.0, 2.0, 2.0));
+        // Dragged past the left edge: only the part on this monitor.
+        let r = region(&bounds(1.0), [-0.2, 0.0, 0.3, 0.5], 100);
+        assert_eq!((r.x, r.w), (0.0, 100.0));
     }
 
     #[test]

@@ -182,7 +182,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "update" => {
                 tauri::async_runtime::spawn(crate::updater::check(app.clone(), true));
             }
-            "quit" => app.exit(0),
+            "quit" => crate::quit(app),
             id => on_delay(app, id),
         })
         .build(app)?;

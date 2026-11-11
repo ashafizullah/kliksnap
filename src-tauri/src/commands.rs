@@ -129,7 +129,7 @@ pub fn open_github() -> Result<(), String> {
 
 #[tauri::command]
 pub fn quit(app: AppHandle) {
-    app.exit(0);
+    crate::quit(&app);
 }
 
 #[tauri::command]
@@ -587,8 +587,17 @@ pub async fn export_image(
             // The typed extension picks the format; without one, Settings does.
             match output::Format::from_path(&path, s.jpg_quality) {
                 Some(f) => format = f,
+                // Added, not swapped in: "v1.2" must not become "v1.png".
                 None => {
-                    path.set_extension(format.ext());
+                    let mut name = path.file_name().unwrap_or_default().to_os_string();
+                    name.push(".");
+                    name.push(format.ext());
+                    path.set_file_name(name);
+                    // The dialog asked about the name as typed, not this one.
+                    if path.exists() {
+                        let name = path.file_name().unwrap_or_default().to_string_lossy();
+                        path = output::unique_path(path.parent().unwrap_or(&dir), &name);
+                    }
                 }
             }
             path
@@ -718,7 +727,9 @@ pub fn save_settings(
         }
         return Err(e);
     }
-    {
+    // The rest can still fail (an unwritable config folder, say): the
+    // shortcuts then go back too, so they match what stays saved.
+    let rest = (|| -> Result<(), String> {
         use tauri_plugin_autostart::ManagerExt;
         let autostart = app.autolaunch();
         let enabled = autostart.is_enabled().unwrap_or(false);
@@ -730,14 +741,21 @@ pub fn save_settings(
             };
             r.map_err(|e| e.to_string())?;
         }
+        if settings.history_limit < old.history_limit {
+            crate::history::trim(&app, settings.history_limit)?;
+        }
+        crate::settings::store(&app, &settings)
+    })();
+    if let Err(e) = rest {
+        let _ = hotkeys::register(&app, &old);
+        if print_screen_changed {
+            let _ = platform::set_print_screen_opens_snipping(!old.print_screen);
+        }
+        return Err(e);
     }
     if settings.show_tray != old.show_tray {
         tray::set_visible(&app, settings.show_tray);
     }
-    if settings.history_limit < old.history_limit {
-        crate::history::trim(&app, settings.history_limit)?;
-    }
-    crate::settings::store(&app, &settings)?;
     crate::i18n::set(&settings.language);
     *state.settings.lock().unwrap() = settings;
     tray::refresh(&app);

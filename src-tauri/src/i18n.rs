@@ -76,6 +76,7 @@ const ID: &[(&str, &str)] = &[
     ("Text recognition failed", "Pengenalan teks gagal"),
     ("Color copied", "Warna disalin"),
     ("Recording failed", "Rekaman gagal"),
+    ("Couldn't save the screenshot", "Tangkapan layar gagal disimpan"),
     ("Recording saved", "Rekaman disimpan"),
     ("GIF saved", "GIF disimpan"),
     ("Scrolling capture failed", "Tangkapan gulir gagal"),

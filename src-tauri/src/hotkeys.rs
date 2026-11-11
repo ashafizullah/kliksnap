@@ -49,30 +49,38 @@ pub fn bindings(s: &Settings) -> Vec<(&str, Mode)> {
 
 const PRINT_SCREEN: &str = "PrintScreen";
 
+/// Registers every shortcut it can. One that fails (taken by another app,
+/// say) is reported but does not cost the others.
 pub fn register(app: &AppHandle, s: &Settings) -> Result<(), String> {
     let manager = app.global_shortcut();
     manager.unregister_all().map_err(|e| e.to_string())?;
     let mut registered = Vec::new();
+    let mut failed = Vec::new();
     for (accelerator, mode) in bindings(s) {
         if accelerator.trim().is_empty() {
             continue;
         }
-        let shortcut: Shortcut = accelerator
-            .parse()
-            .map_err(|e| format!("{accelerator}: {e}"))?;
-        manager.register(shortcut).map_err(|e| {
-            if accelerator == PRINT_SCREEN {
-                format!(
-                    "Print Screen is still taken, probably by the Snipping Tool. \
-                     Sign out and back in, or turn off \"Use the Print screen key to open \
-                     screen capture\" in Windows Settings. ({e})"
-                )
-            } else {
-                format!("{accelerator}: {e}")
+        let shortcut: Shortcut = match accelerator.parse() {
+            Ok(shortcut) => shortcut,
+            Err(e) => {
+                failed.push(format!("{accelerator}: {e}"));
+                continue;
             }
-        })?;
-        registered.push((shortcut, mode));
+        };
+        match manager.register(shortcut) {
+            Ok(()) => registered.push((shortcut, mode)),
+            Err(e) if accelerator == PRINT_SCREEN => failed.push(format!(
+                "Print Screen is still taken, probably by the Snipping Tool. \
+                 Sign out and back in, or turn off \"Use the Print screen key to open \
+                 screen capture\" in Windows Settings. ({e})"
+            )),
+            Err(e) => failed.push(format!("{accelerator}: {e}")),
+        }
     }
     *app.state::<AppState>().hotkeys.lock().unwrap() = registered;
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
 }

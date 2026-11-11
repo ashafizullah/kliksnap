@@ -345,7 +345,9 @@
     }
     const [x2, y2] = e.shiftKey ? constrain(tool, dragFrom.x, dragFrom.y, p.x, p.y) : [p.x, p.y];
     if (tool === "crop") {
-      cropDraft = normalize(dragFrom.x, dragFrom.y, x2, y2);
+      // Shift's square can reach past the image; the crop is what lies on it.
+      const [cx, cy] = [Math.max(0, Math.min(canvas.width, x2)), Math.max(0, Math.min(canvas.height, y2))];
+      cropDraft = normalize(dragFrom.x, dragFrom.y, cx, cy);
     } else if (DRAG_TOOLS.has(tool)) {
       draft = {
         kind: tool as DragShape["kind"],

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { closeWindow, imageUrl, invoke, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
 
@@ -57,7 +57,10 @@
 
   onMount(() => {
     // Sent by Rust: the webview gets no mouse-move events while unfocused.
-    const unlistenHover = listen<boolean>("preview:hover", (e) => setHover(e.payload));
+    // This window's own events only: a plain `listen` hears every preview's.
+    const unlistenHover = getCurrentWebviewWindow().listen<boolean>("preview:hover", (e) =>
+      setHover(e.payload),
+    );
     schedule();
     return () => {
       clearTimeout(timer);
