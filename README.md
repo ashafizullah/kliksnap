@@ -38,7 +38,7 @@
 - **Record GIF**: an area straight to an animated GIF
 - **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
-- **Annotate**: arrow, line, rectangle, ellipse, pen, text, numbered steps, highlighter, blur, pixelate, crop, undo/redo
+- **Annotate**: arrow, line, rectangle, ellipse, pen, text (with an optional background), numbered steps, highlighter, blur, pixelate, crop, undo/redo; drag an annotation to move it
 - **Auto-redact**: one click hides email addresses, phone and card numbers, IP addresses, API keys and passwords that OCR finds
 - **Background**: place a screenshot on a gradient or solid backdrop with padding, rounded corners and a shadow
 - **Color picker**: press `C` while selecting to turn the cursor into an eyedropper, then click to copy the color as hex
@@ -96,7 +96,7 @@ On Windows you can also hide the tray icon in Settings; KlikSnap keeps running o
 
 On Windows, turn on *Print Screen captures an area* in Settings to use `PrtScn` instead of the Snipping Tool.
 
-In area mode, press `Space` to switch to window mode, `C` for the color picker (click to copy a color) and `Esc` to cancel. In the editor, use `A L R O D T N H B P C` to pick a tool, `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
+In area mode, press `Space` to switch to window mode, `C` for the color picker (click to copy a color) and `Esc` to cancel. In the editor, use `V A L R O D T N H B P C` to pick a tool (`V` selects: drag to move, arrow keys to nudge, `Delete` to remove), `1 2 3` or `[ ]` to set the size, `⌘⌫` to clear everything, `⌘C` to copy, `⌘S` to save, `⌘⇧S` for Save As and `⌘P` to pin.
 
 A pin moves when dragged and zooms with the scroll wheel (`0` resets to 100%); hold `⌥` / `Alt` while scrolling to fade it. Right-click it for Copy, Save, Annotate, Opacity and Click Through; double-click or press `Esc` to close it. A click-through pin ignores the mouse until you choose *Make Pins Clickable Again* in the menu bar / tray menu.
 
