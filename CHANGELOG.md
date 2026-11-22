@@ -3,6 +3,14 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.18.0
+
+### Added
+
+- Move annotations in the editor: what you just added (text, an arrow, a box, a number…) stays picked, so you can drag it right away. The new Select tool (`V`) picks and moves any annotation, pen strokes included
+- A picked annotation moves with the arrow keys (`Shift` for bigger steps) and is removed with `Delete`; the numbers left count from 1 again
+- Text can sit on a filled background: turn it on next to Bold, and the text goes black or white to stay readable
+
 ## 0.17.2
 
 ### Fixed

@@ -108,6 +108,8 @@ const ID: Record<string, string> = {
   // Editor
   Arrow: "Panah",
   Line: "Garis",
+  Select: "Pilih",
+  "Text background": "Latar teks",
   Rectangle: "Persegi",
   Ellipse: "Elips",
   Pen: "Pena",

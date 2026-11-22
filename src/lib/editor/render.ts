@@ -3,6 +3,7 @@ import {
   badgeText,
   fontCss,
   normalize,
+  textPad,
   turnPoint,
   turnedSize,
   type Backdrop,
@@ -63,6 +64,92 @@ export function turnShape(s: Shape, m: Orient, w: number, h: number, scale: numb
   const [x1, y1] = at(s.x1, s.y1);
   const [x2, y2] = at(s.x2, s.y2);
   return { ...s, x1, y1, x2, y2 };
+}
+
+/** The box a shape covers, in image pixels. */
+export function shapeBounds(s: Shape, scale: number): Rect {
+  const half = (s.size * scale) / 2;
+  if (s.kind === "pen") {
+    let [x1, y1, x2, y2] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < s.points.length; i += 2) {
+      x1 = Math.min(x1, s.points[i]);
+      x2 = Math.max(x2, s.points[i]);
+      y1 = Math.min(y1, s.points[i + 1]);
+      y2 = Math.max(y2, s.points[i + 1]);
+    }
+    return { x: x1 - half, y: y1 - half, w: x2 - x1 + 2 * half, h: y2 - y1 + 2 * half };
+  }
+  if (s.kind === "step") {
+    const r = s.size * scale;
+    return { x: s.x - r, y: s.y - r, w: 2 * r, h: 2 * r };
+  }
+  if (s.kind === "text") {
+    const box = textBox(s, scale);
+    const pad = s.bg ? textPad(s.size * scale) : 0;
+    return { x: s.x - pad, y: s.y - pad, w: box.w + 2 * pad, h: box.h + 2 * pad };
+  }
+  const r = normalize(s.x1, s.y1, s.x2, s.y2);
+  if (s.kind === "highlight" || s.kind === "blur" || s.kind === "pixelate") return r;
+  return { x: r.x - half, y: r.y - half, w: r.w + 2 * half, h: r.h + 2 * half };
+}
+
+function segmentDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len)) : 0;
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+/**
+ * Whether `x, y` is on a shape, give or take `tol` image pixels. Outlines are
+ * hit on their stroke only, so what they surround stays reachable.
+ */
+export function hitShape(s: Shape, x: number, y: number, scale: number, tol: number): boolean {
+  const reach = tol + (s.size * scale) / 2;
+  if (s.kind === "pen") {
+    const p = s.points;
+    if (p.length === 2) return Math.hypot(x - p[0], y - p[1]) <= reach;
+    for (let i = 0; i < p.length - 2; i += 2) {
+      if (segmentDistance(x, y, p[i], p[i + 1], p[i + 2], p[i + 3]) <= reach) return true;
+    }
+    return false;
+  }
+  if (s.kind === "line" || s.kind === "arrow") return segmentDistance(x, y, s.x1, s.y1, s.x2, s.y2) <= reach;
+  if (s.kind === "step") return Math.hypot(x - s.x, y - s.y) <= s.size * scale + tol;
+  const b = shapeBounds(s, scale);
+  const inside = (pad: number) => x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad;
+  if (s.kind === "rect") {
+    const r = normalize(s.x1, s.y1, s.x2, s.y2);
+    const inner = x > r.x + reach && x < r.x + r.w - reach && y > r.y + reach && y < r.y + r.h - reach;
+    return inside(tol) && !inner;
+  }
+  if (s.kind === "ellipse") {
+    const r = normalize(s.x1, s.y1, s.x2, s.y2);
+    const rx = r.w / 2;
+    const ry = r.h / 2;
+    if (rx < 1 || ry < 1) return inside(tol);
+    const d = Math.hypot((x - r.x - rx) / rx, (y - r.y - ry) / ry);
+    return Math.abs(d - 1) * Math.min(rx, ry) <= reach;
+  }
+  return inside(tol);
+}
+
+/** Marks the selected shape (editing view only). */
+export function drawSelection(ctx: CanvasRenderingContext2D, b: Rect, scale: number) {
+  const pad = 4 * scale;
+  ctx.save();
+  ctx.lineWidth = scale;
+  const strokes: [string, number[]][] = [
+    ["#ffffff", []],
+    ["#007aff", [4 * scale, 3 * scale]],
+  ];
+  for (const [color, dash] of strokes) {
+    ctx.strokeStyle = color;
+    ctx.setLineDash(dash);
+    ctx.strokeRect(b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad);
+  }
+  ctx.restore();
 }
 
 function pixelate(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rect, block: number) {
@@ -149,6 +236,15 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
       const fontSize = s.size * scale;
       ctx.font = fontCss(s.font, s.bold, fontSize);
       ctx.textBaseline = "top";
+      if (s.bg) {
+        const box = textBox(s, scale);
+        const pad = textPad(fontSize);
+        ctx.beginPath();
+        ctx.roundRect(s.x - pad, s.y - pad, box.w + 2 * pad, box.h + 2 * pad, fontSize * 0.3);
+        ctx.fill();
+        ctx.shadowColor = "transparent";
+        ctx.fillStyle = badgeText(s.color);
+      }
       s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fontSize * 1.25));
     } else if (s.kind === "step") {
       const r = s.size * scale;

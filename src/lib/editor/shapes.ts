@@ -1,4 +1,5 @@
 export type Tool =
+  | "select"
   | "arrow"
   | "line"
   | "rect"
@@ -12,7 +13,7 @@ export type Tool =
   | "crop";
 
 export type DragShape = {
-  kind: Exclude<Tool, "pen" | "text" | "step" | "crop">;
+  kind: Exclude<Tool, "select" | "pen" | "text" | "step" | "crop">;
   x1: number;
   y1: number;
   x2: number;
@@ -30,7 +31,12 @@ export type TextShape = {
   size: number;
   font: FontId;
   bold: boolean;
+  /** A filled box in `color` behind the text, which then turns black or white. */
+  bg?: boolean;
 };
+
+/** How far a text's background box reaches past its text, for a font size. */
+export const textPad = (fontPx: number) => fontPx * 0.25;
 
 /** A numbered badge; `n` is fixed when placed, counting the badges before it. */
 export type StepShape = { kind: "step"; x: number; y: number; n: number; color: string; size: number };
@@ -39,6 +45,13 @@ export type StepShape = { kind: "step"; x: number; y: number; n: number; color: 
 export type PenShape = { kind: "pen"; points: number[]; color: string; size: number };
 
 export type Shape = DragShape | PenShape | TextShape | StepShape;
+
+/** `s` shifted by `dx, dy`. */
+export function moveShape(s: Shape, dx: number, dy: number): Shape {
+  if (s.kind === "pen") return { ...s, points: s.points.map((v, i) => v + (i % 2 ? dy : dx)) };
+  if (s.kind === "text" || s.kind === "step") return { ...s, x: s.x + dx, y: s.y + dy };
+  return { ...s, x1: s.x1 + dx, y1: s.y1 + dy, x2: s.x2 + dx, y2: s.y2 + dy };
+}
 
 export type Rect = { x: number; y: number; w: number; h: number };
 

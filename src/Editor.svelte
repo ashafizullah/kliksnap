@@ -16,13 +16,16 @@
     ROTATE_RIGHT,
     SIZES,
     UPRIGHT,
+    badgeText,
     compose,
     constrain,
     fillCss,
     fontCss,
+    moveShape,
     nextStep,
     normalize,
     parseBackdrop,
+    textPad,
     turnRect,
     type Backdrop,
     type DragShape,
@@ -39,9 +42,12 @@
     drawCropMask,
     drawFrame,
     drawScene,
+    drawSelection,
     exportPixels,
     frameInsets,
     frameScreenRadii,
+    hitShape,
+    shapeBounds,
     turnImage,
     turnShape,
   } from "./lib/editor/render";
@@ -49,6 +55,7 @@
   const id = Number(param("id"));
 
   const TOOLS: { id: Tool; label: string; key: string; d: string }[] = [
+    { id: "select", label: "Select", key: "v", d: "M5 2.5v12l3.2-3 2 4.3 1.8-.8-2-4.3h4.3z" },
     { id: "arrow", label: "Arrow", key: "a", d: "M4 14L14 4M8 4h6v6" },
     { id: "line", label: "Line", key: "l", d: "M4 14L14 4" },
     { id: "rect", label: "Rectangle", key: "r", d: "M3 4h12v10H3z" },
@@ -99,6 +106,7 @@
   );
   let font = $state<FontId>(prefs.font in FONTS ? prefs.font : "sans");
   let bold = $state<boolean>(prefs.bold ?? true);
+  let textBg = $state<boolean>(prefs.textBg ?? false);
   const sizeSpec = $derived(SIZES[tool]);
 
   // The backdrop carries over too, on or off.
@@ -106,7 +114,7 @@
   let backdropPanel = $state(false);
 
   $effect(() => {
-    const json = JSON.stringify({ sizes, font, bold, backdrop: scene.backdrop, lastBackdrop });
+    const json = JSON.stringify({ sizes, font, bold, textBg, backdrop: scene.backdrop, lastBackdrop });
     try {
       localStorage.setItem(PREFS, json);
     } catch {
@@ -131,6 +139,48 @@
   let cropDraft = $state.raw<Rect | null>(null);
   let dragFrom: { x: number; y: number } | null = null;
 
+  // The picked shape, and the scene while it is being dragged. Select picks any
+  // shape; the other tools keep the one just added picked, so it can be moved.
+  let selected = $state<number | null>(null);
+  const sel = $derived(selected !== null && selected < scene.shapes.length ? selected : null);
+  let live = $state.raw<Scene | null>(null);
+  let moving: { index: number; from: { x: number; y: number } } | null = null;
+  let hovering = $state(false);
+
+  $effect(() => {
+    void tool;
+    selected = null;
+  });
+
+  /** The shape a press at `p` would move, as its index. */
+  function grabAt(p: { x: number; y: number }) {
+    if (tool === "select") return hitAt(p);
+    return sel !== null && hitShape(scene.shapes[sel], p.x, p.y, scale, 5 / ratio) ? sel : null;
+  }
+
+  /** The topmost shape under a point, as its index. */
+  function hitAt(p: { x: number; y: number }) {
+    const tol = 5 / ratio;
+    for (let i = scene.shapes.length - 1; i >= 0; i--) {
+      if (hitShape(scene.shapes[i], p.x, p.y, scale, tol)) return i;
+    }
+    return null;
+  }
+
+  function moveSelected(dx: number, dy: number) {
+    if (sel === null) return;
+    commit({ ...scene, shapes: scene.shapes.map((s, i) => (i === sel ? moveShape(s, dx, dy) : s)) });
+  }
+
+  function removeSelected() {
+    if (sel === null) return;
+    // The badges left keep counting from 1.
+    let n = 0;
+    const shapes = scene.shapes.filter((_, i) => i !== sel).map((s) => (s.kind === "step" ? { ...s, n: ++n } : s));
+    selected = null;
+    commit({ ...scene, shapes });
+  }
+
   let text = $state<{ x: number; y: number; value: string } | null>(null);
   let textArea = $state<HTMLTextAreaElement>();
   let status = $state("");
@@ -150,6 +200,7 @@
 
   function undo() {
     if (!past.length) return;
+    selected = null;
     future = [...future, scene];
     scene = past[past.length - 1];
     past = past.slice(0, -1);
@@ -170,6 +221,7 @@
 
   function clearAll() {
     text = null;
+    selected = null;
     if (scene.shapes.length || scene.crop) commit({ ...scene, shapes: [], crop: null });
   }
 
@@ -217,6 +269,7 @@
 
   function redo() {
     if (!future.length) return;
+    selected = null;
     past = [...past, scene];
     scene = future[future.length - 1];
     future = future.slice(0, -1);
@@ -229,13 +282,15 @@
       canvas.height = image.height;
     }
     const ctx = canvas.getContext("2d")!;
-    drawScene(ctx, image, scene, scale, draft);
+    const shown = live ?? scene;
+    drawScene(ctx, image, shown, scale, draft);
     const crop = cropDraft ?? scene.crop;
     if (crop) drawCropMask(ctx, crop, scale);
+    if (sel !== null) drawSelection(ctx, shapeBounds(shown.shapes[sel], scale), scale);
   }
 
   $effect(() => {
-    void [scene, draft, cropDraft];
+    void [scene, draft, cropDraft, live, sel];
     redraw();
   });
 
@@ -316,9 +371,19 @@
     backdropPanel = false;
     if (text) commitText();
     const p = toImage(e);
+    const grabbed = grabAt(p);
+    if (tool === "select" || grabbed !== null) {
+      selected = grabbed;
+      if (grabbed !== null) {
+        canvas.setPointerCapture(e.pointerId);
+        moving = { index: grabbed, from: p };
+      }
+      return;
+    }
     if (tool === "step") {
       const step = { kind: "step" as const, x: p.x, y: p.y, n: nextStep(scene.shapes), color, size: sizes.step };
       commit({ ...scene, shapes: [...scene.shapes, step] });
+      selected = scene.shapes.length - 1;
       return;
     }
     if (tool === "text") {
@@ -333,6 +398,16 @@
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (moving) {
+      const { index, from } = moving;
+      const at = toImage(e);
+      const [dx, dy] = [at.x - from.x, at.y - from.y];
+      // A click that wobbles is still a click.
+      if (!live && Math.hypot(dx, dy) < 3 / ratio) return;
+      live = { ...scene, shapes: scene.shapes.map((s, i) => (i === index ? moveShape(s, dx, dy) : s)) };
+      return;
+    }
+    hovering = !dragFrom && grabAt(toImage(e)) !== null;
     if (!dragFrom) return;
     const p = toImage(e);
     if (draft?.kind === "pen") {
@@ -362,11 +437,19 @@
   }
 
   function onPointerUp() {
+    if (moving) {
+      if (live) commit(live);
+      live = null;
+      moving = null;
+      return;
+    }
     if (cropDraft && cropDraft.w > 4 && cropDraft.h > 4) {
       commit({ ...scene, crop: cropDraft });
     } else if (draft && "x2" in draft && Math.hypot(draft.x2 - draft.x1, draft.y2 - draft.y1) > 3) {
       commit({ ...scene, shapes: [...scene.shapes, draft] });
+      selected = scene.shapes.length - 1;
     } else if (draft?.kind === "pen") {
+      // Strokes are not picked: the next one often starts on the last.
       // A click without moving leaves a dot.
       commit({ ...scene, shapes: [...scene.shapes, draft] });
     }
@@ -381,8 +464,9 @@
     if (value) {
       commit({
         ...scene,
-        shapes: [...scene.shapes, { kind: "text", x: text.x, y: text.y, text: value, color, size: sizes.text, font, bold }],
+        shapes: [...scene.shapes, { kind: "text", x: text.x, y: text.y, text: value, color, size: sizes.text, font, bold, bg: textBg }],
       });
+      selected = scene.shapes.length - 1;
     }
     text = null;
   }
@@ -449,6 +533,35 @@
     if (e.key === "Escape" && backdropPanel) {
       backdropPanel = false;
       return;
+    }
+    if (e.key === "Escape" && moving) {
+      live = null;
+      moving = null;
+      return;
+    }
+    if (sel !== null && !moving) {
+      const field = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+      const step = (e.shiftKey ? 10 : 1) * scale;
+      const nudge: Record<string, [number, number]> = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, -step],
+        ArrowDown: [0, step],
+      };
+      if (e.key === "Escape") {
+        selected = null;
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        removeSelected();
+        return;
+      }
+      if (nudge[e.key] && !field) {
+        e.preventDefault();
+        moveSelected(...nudge[e.key]);
+        return;
+      }
     }
     if (e.key === "Escape" && dragFrom) {
       dragFrom = null;
@@ -651,6 +764,16 @@
         <button class="icon" class:active={bold} title={tr("Bold")} aria-label={tr("Bold")} aria-pressed={bold} onclick={() => (bold = !bold)}>
           <b>B</b>
         </button>
+        <button
+          class="icon"
+          class:active={textBg}
+          title={tr("Text background")}
+          aria-label={tr("Text background")}
+          aria-pressed={textBg}
+          onclick={() => (textBg = !textBg)}
+        >
+          <svg viewBox="0 0 18 18"><path d="M4.5 2.5h9a2 2 0 012 2v9a2 2 0 01-2 2h-9a2 2 0 01-2-2v-9a2 2 0 012-2zM6.3 12.5L9 5.5l2.7 7M7.2 10.3h3.6" /></svg>
+        </button>
       </div>
     {/if}
 
@@ -679,6 +802,8 @@
         <canvas
           bind:this={canvas}
           class:text-tool={tool === "text"}
+          class:select-tool={tool === "select"}
+          class:over={hovering}
           style="width:{view.w}px; height:{view.h}px"
           style:border-radius={preview?.screenRadius ?? "0"}
           onpointerdown={onPointerDown}
@@ -693,7 +818,10 @@
             wrap="off"
             spellcheck="false"
             aria-label={tr("Text")}
-            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
+            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{textBg ? badgeText(color) : color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
+            style:background={textBg ? color : undefined}
+            style:box-shadow={textBg ? `0 0 0 ${textPad(textFontPx)}px ${color}` : undefined}
+            style:border-radius={textBg ? `${textFontPx * 0.05}px` : undefined}
             onkeydown={onTextKey}
             onblur={commitText}
           ></textarea>
@@ -949,6 +1077,12 @@
   }
   canvas.text-tool {
     cursor: text;
+  }
+  canvas.select-tool {
+    cursor: default;
+  }
+  canvas.over {
+    cursor: move;
   }
   textarea {
     position: absolute;
