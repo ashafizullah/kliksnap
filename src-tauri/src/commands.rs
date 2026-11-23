@@ -180,6 +180,20 @@ pub fn reveal_toast_file(state: State<AppState>) -> Result<(), String> {
     output::reveal(std::path::Path::new(&path))
 }
 
+/// The font families installed on this computer, sorted, for the editor's text.
+/// Not async: AppKit lists them on the main thread.
+#[tauri::command]
+pub fn system_fonts() -> Vec<String> {
+    let mut names: Vec<String> = platform::font_families()
+        .into_iter()
+        // A leading dot hides a system font; a leading @ is a vertical variant.
+        .filter(|n| !n.is_empty() && !n.starts_with('.') && !n.starts_with('@'))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
 #[tauri::command]
 pub fn close_window(window: WebviewWindow) {
     let _ = window.destroy();
@@ -870,4 +884,18 @@ pub async fn pick_folder(app: AppHandle, window: WebviewWindow) -> Option<String
         .into_path()
         .ok()?;
     Some(picked.display().to_string())
+}
+
+#[cfg(test)]
+mod font_tests {
+    #[test]
+    fn system_fonts_are_sorted_and_visible() {
+        let fonts = super::system_fonts();
+        // Linux runners may have no fontconfig; macOS and Windows always ship fonts.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        assert!(!fonts.is_empty());
+        assert!(fonts.iter().all(|n| !n.starts_with('.') && !n.starts_with('@')));
+        let lower: Vec<String> = fonts.iter().map(|n| n.to_lowercase()).collect();
+        assert!(lower.windows(2).all(|w| w[0] <= w[1]));
+    }
 }

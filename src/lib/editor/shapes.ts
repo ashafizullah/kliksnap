@@ -192,17 +192,20 @@ export const SIZES: Partial<Record<Tool, SizeSpec>> = {
   pixelate: { label: "Block size", min: 3, max: 30, presets: [5, 8, 14] },
 };
 
-export const FONTS = {
+/** The built-in fonts; any other font id is the name of a family installed on the computer. */
+export const FONTS: Record<string, { label: string; stack: string }> = {
   sans: { label: "Sans", stack: `-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif` },
   serif: { label: "Serif", stack: `Georgia, "Times New Roman", serif` },
   mono: { label: "Mono", stack: `ui-monospace, Menlo, Consolas, monospace` },
   hand: { label: "Hand", stack: `"Chalkboard SE", "Comic Sans MS", cursive` },
 };
 
-export type FontId = keyof typeof FONTS;
+export type FontId = string;
 
-export const fontCss = (font: FontId, bold: boolean, px: number) =>
-  `${bold ? 700 : 400} ${px}px ${(FONTS[font] ?? FONTS.sans).stack}`;
+/** An installed family falls back to Sans where it is missing. */
+const fontStack = (font: FontId) => FONTS[font]?.stack ?? `"${font.replace(/["\\]/g, "")}", ${FONTS.sans.stack}`;
+
+export const fontCss = (font: FontId, bold: boolean, px: number) => `${bold ? 700 : 400} ${px}px ${fontStack(font)}`;
 
 /** The number the next badge gets. */
 export const nextStep = (shapes: Shape[]) => shapes.filter((s) => s.kind === "step").length + 1;
