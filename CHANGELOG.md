@@ -3,6 +3,13 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.21.0
+
+### Added
+
+- Text in the editor can use any font installed on your computer: they are listed after the built-in ones
+- Closing the editor asks first when there are annotations to lose. With nothing drawn, or after Copy, Save or Pin, it closes as before
+
 ## 0.20.0
 
 ### Added

@@ -38,7 +38,7 @@
 - **Record GIF**: an area straight to an animated GIF
 - **Pin to screen**: keep a screenshot floating above your windows as a reference; fade it, let clicks pass through, or pin the image on the clipboard
 - **Capture after a delay** (3, 5 or 10 s) and **capture the last area again**
-- **Annotate**: arrow, line, rectangle, ellipse, pen, text (with an optional background or outline), numbered steps, highlighter, spotlight, magnifier, blur, pixelate, crop, undo/redo; move, resize, turn, flip, duplicate and restack annotations, edit text again by double-clicking it, zoom in, and pick any color
+- **Annotate**: arrow, line, rectangle, ellipse, pen, text (in any installed font, with an optional background or outline), numbered steps, highlighter, spotlight, magnifier, blur, pixelate, crop, undo/redo; move, resize, turn, flip, duplicate and restack annotations, edit text again by double-clicking it, zoom in, and pick any color
 - **Auto-redact**: one click hides email addresses, phone and card numbers, IP addresses, API keys and passwords that OCR finds
 - **Background**: place a screenshot on a gradient or solid backdrop with padding, rounded corners and a shadow
 - **Color picker**: press `C` while selecting to turn the cursor into an eyedropper, then click to copy the color as hex

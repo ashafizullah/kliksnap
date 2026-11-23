@@ -443,6 +443,38 @@ mod imp {
         }
     }
 
+    /// The font families installed on this Mac. AppKit: call on the main thread.
+    pub fn font_families() -> Vec<String> {
+        let Some(class) = AnyClass::get(c"NSFontManager") else {
+            return Vec::new();
+        };
+        unsafe {
+            let manager: *mut AnyObject = msg_send![class, sharedFontManager];
+            if manager.is_null() {
+                return Vec::new();
+            }
+            let families: *mut AnyObject = msg_send![manager, availableFontFamilies];
+            if families.is_null() {
+                return Vec::new();
+            }
+            let count: usize = msg_send![families, count];
+            (0..count)
+                .filter_map(|i| {
+                    let name: *mut AnyObject = msg_send![families, objectAtIndex: i];
+                    if name.is_null() {
+                        return None;
+                    }
+                    let utf8: *const std::ffi::c_char = msg_send![name, UTF8String];
+                    (!utf8.is_null()).then(|| {
+                        std::ffi::CStr::from_ptr(utf8)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                })
+                .collect()
+        }
+    }
+
     /// Plays the system's own screenshot sound, or KlikSnap's pop.
     pub fn play_sound(sound: super::Sound) {
         const SHUTTER: &str = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif";
@@ -472,6 +504,46 @@ mod imp {
 #[cfg(target_os = "windows")]
 mod imp {
     use tauri::WebviewWindow;
+
+    /// The font families installed on this PC.
+    pub fn font_families() -> Vec<String> {
+        use windows::Win32::Foundation::LPARAM;
+        use windows::Win32::Graphics::Gdi::{
+            EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW,
+        };
+
+        unsafe extern "system" fn each(
+            font: *const LOGFONTW,
+            _metrics: *const TEXTMETRICW,
+            _kind: u32,
+            out: LPARAM,
+        ) -> i32 {
+            let names = &mut *(out.0 as *mut Vec<String>);
+            let face = &(*font).lfFaceName;
+            let len = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+            names.push(String::from_utf16_lossy(&face[..len]));
+            1
+        }
+
+        let mut names: Vec<String> = Vec::new();
+        unsafe {
+            let dc = GetDC(None);
+            // Every family, in every script.
+            let all = LOGFONTW {
+                lfCharSet: DEFAULT_CHARSET,
+                ..Default::default()
+            };
+            EnumFontFamiliesExW(
+                dc,
+                &all,
+                Some(each),
+                LPARAM(&mut names as *mut Vec<String> as isize),
+                0,
+            );
+            ReleaseDC(None, dc);
+        }
+        names
+    }
 
     #[repr(C)]
     struct Point {
@@ -749,6 +821,20 @@ mod imp {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod imp {
     use tauri::WebviewWindow;
+
+    /// The font families fontconfig knows; none when `fc-list` is missing.
+    pub fn font_families() -> Vec<String> {
+        let Ok(out) = std::process::Command::new("fc-list")
+            .args(["--format", "%{family[0]}\n"])
+            .output()
+        else {
+            return Vec::new();
+        };
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
 
     pub fn cursor_pos() -> (i32, i32) {
         (0, 0)

@@ -1329,6 +1329,7 @@ pub fn run() {
             commands::overlay_cursor,
             commands::overlay_loupe,
             commands::shot_info,
+            commands::system_fonts,
             commands::copy_shot,
             commands::save_shot,
             commands::edit_shot,

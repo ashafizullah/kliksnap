@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
   import { closeWindow, imageUrl, invoke, isLinux, isMac, loadImage, param, ready } from "./lib/api";
   import { tr } from "./lib/i18n";
   import {
@@ -136,7 +137,9 @@
       }),
     ) as Record<Tool, number>,
   );
-  let font = $state<FontId>(prefs.font in FONTS ? prefs.font : "sans");
+  let font = $state<FontId>(typeof prefs.font === "string" && prefs.font ? prefs.font : "sans");
+  // The families installed on this computer, offered after the built-in fonts.
+  let systemFonts = $state.raw<string[]>([]);
   let bold = $state<boolean>(prefs.bold ?? true);
   let textBg = $state<boolean>(prefs.textBg ?? false);
   // The color last picked outside the presets.
@@ -766,6 +769,20 @@
     return Math.max(textFontPx * 2, widest + textFontPx);
   });
 
+  // Closing asks first once there is something to lose.
+  const dirty = $derived(past.length > 0 || !!text?.value.trim());
+  let confirmClose = $state(false);
+  let keepButton = $state<HTMLButtonElement>();
+
+  function requestClose() {
+    if (!dirty) return closeWindow();
+    confirmClose = true;
+  }
+
+  $effect(() => {
+    if (confirmClose) keepButton?.focus();
+  });
+
   /** Exports the annotated image and closes the editor, unless Save As is cancelled. */
   let shareButton = $state<HTMLButtonElement>();
 
@@ -786,6 +803,10 @@
   }
 
   function onKeyDown(e: KeyboardEvent) {
+    if (confirmClose) {
+      if (e.key === "Escape") confirmClose = false;
+      return;
+    }
     const cmd = isMac ? e.metaKey : e.ctrlKey;
     const key = e.key.toLowerCase();
     if (cmd) {
@@ -795,7 +816,7 @@
         c: () => exportImage(e.shiftKey ? "savecopy" : "copy"),
         s: () => exportImage(e.shiftKey ? "saveas" : "save"),
         p: () => exportImage("pin"),
-        w: closeWindow,
+        w: requestClose,
         backspace: clearAll,
         d: duplicateSelected,
         "=": () => setZoom(zoom * 1.25),
@@ -881,6 +902,11 @@
     scroller.addEventListener("wheel", onWheel, { passive: false });
     scroller.addEventListener("gesturestart", onGesture);
     scroller.addEventListener("gesturechange", onGesture);
+    // The window's own close button: with a listener here, the window waits for us to close it.
+    const offClose = getCurrentWebviewWindow().listen("tauri://close-requested", requestClose);
+    invoke<string[]>("system_fonts")
+      .then((names) => (systemFonts = names))
+      .catch(() => {});
     (async () => {
       const info = await invoke<{ width: number; height: number; scale: number } | null>("shot_info", { id });
       if (!info) return closeWindow();
@@ -898,6 +924,7 @@
     });
     return () => {
       observer?.disconnect();
+      offClose.then((off) => off());
       scroller.removeEventListener("wheel", onWheel);
       scroller.removeEventListener("gesturestart", onGesture);
       scroller.removeEventListener("gesturechange", onGesture);
@@ -1117,6 +1144,13 @@
           {#each Object.entries(FONTS) as [fid, f] (fid)}
             <option value={fid}>{f.label}</option>
           {/each}
+          {#if systemFonts.length}
+            <optgroup label={tr("Installed fonts")}>
+              {#each systemFonts as name (name)}
+                <option value={name}>{name}</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
         <button
           class="icon"
@@ -1258,6 +1292,19 @@
       <button class="primary" title="{tr('Copy')} ({mod}C)" onclick={() => exportImage("copy")}>{tr("Copy")}</button>
     </div>
   </footer>
+
+  {#if confirmClose}
+    <div class="scrim">
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="close-title" aria-describedby="close-text">
+        <p id="close-title" class="dialog-title">{tr("Close without saving?")}</p>
+        <p id="close-text" class="muted">{tr("Your annotations will be lost.")}</p>
+        <div class="dialog-actions">
+          <button bind:this={keepButton} onclick={() => (confirmClose = false)}>{tr("Keep Editing")}</button>
+          <button class="danger" onclick={closeWindow}>{tr("Discard")}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1352,7 +1399,51 @@
     font-size: 12px;
     font-variant-numeric: tabular-nums;
   }
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .dialog {
+    width: min(340px, calc(100% - 32px));
+    padding: 18px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  }
+  .dialog p {
+    margin: 0;
+  }
+  .dialog-title {
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .dialog-actions button {
+    padding: 0 14px;
+    font-weight: 500;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .dialog-actions .danger {
+    background: #e5484d;
+    color: #fff;
+    box-shadow: none;
+  }
+  .dialog-actions .danger:hover {
+    background: #e5484d;
+    filter: brightness(1.1);
+  }
   select {
+    max-width: 170px;
     height: 28px;
     border: 1px solid var(--border);
     border-radius: 6px;
