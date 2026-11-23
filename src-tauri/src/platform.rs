@@ -465,8 +465,11 @@ mod imp {
                         return None;
                     }
                     let utf8: *const std::ffi::c_char = msg_send![name, UTF8String];
-                    (!utf8.is_null())
-                        .then(|| std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned())
+                    (!utf8.is_null()).then(|| {
+                        std::ffi::CStr::from_ptr(utf8)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
                 })
                 .collect()
         }

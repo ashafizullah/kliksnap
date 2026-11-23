@@ -894,7 +894,9 @@ mod font_tests {
         // Linux runners may have no fontconfig; macOS and Windows always ship fonts.
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         assert!(!fonts.is_empty());
-        assert!(fonts.iter().all(|n| !n.starts_with('.') && !n.starts_with('@')));
+        assert!(fonts
+            .iter()
+            .all(|n| !n.starts_with('.') && !n.starts_with('@')));
         let lower: Vec<String> = fonts.iter().map(|n| n.to_lowercase()).collect();
         assert!(lower.windows(2).all(|w| w[0] <= w[1]));
     }
