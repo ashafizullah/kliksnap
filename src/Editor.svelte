@@ -46,7 +46,11 @@
     canFlip,
     drawSelection,
     flipShape,
+    gripCursor,
+    gripPoint,
+    grips,
     handleAt,
+    resizeShape,
     rotateShape,
     selectionExtent,
     shapeCenter,
@@ -56,6 +60,7 @@
     hitShape,
     turnImage,
     turnShape,
+    type Grip,
   } from "./lib/editor/render";
 
   const id = Number(param("id"));
@@ -71,14 +76,31 @@
     { id: "text", group: "draw", label: "Text", key: "t", d: "M4 4h10M9 4v11" },
     { id: "step", group: "draw", label: "Number", key: "n", d: "M3 9a6 6 0 1 0 12 0a6 6 0 1 0-12 0M8 7l1.5-1v6" },
     { id: "highlight", group: "hide", label: "Highlight", key: "h", d: "M3 15h12M6 12l5-8 3 2-5 8H6z" },
+    { id: "spotlight", group: "hide", label: "Spotlight", key: "s", d: "M9 6a3 3 0 100 6 3 3 0 000-6zM9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.7 3.7l1.4 1.4M12.9 12.9l1.4 1.4M3.7 14.3l1.4-1.4M12.9 5.1l1.4-1.4" },
+    { id: "loupe", group: "hide", label: "Magnifier", key: "m", d: "M7.5 2.5a5 5 0 100 10 5 5 0 000-10zM11.2 11.2l4.3 4.3" },
     { id: "blur", group: "hide", label: "Blur", key: "b", d: "M9 2.5c3 3.5 5 6 5 8.5a5 5 0 01-10 0c0-2.5 2-5 5-8.5z" },
     { id: "pixelate", group: "hide", label: "Pixelate", key: "p", d: "M3 3h4v4H3zM11 3h4v4h-4zM7 7h4v4H7zM3 11h4v4H3zM11 11h4v4h-4z" },
     { id: "crop", group: "image", label: "Crop", key: "c", d: "M5 2v11h11M2 5h11v11" },
   ];
   // Areas cover what is under them, so the drawing tools only move one that is picked.
-  const AREAS = new Set<Shape["kind"]>(["highlight", "blur", "pixelate"]);
+  const AREAS = new Set<Shape["kind"]>(["highlight", "spotlight", "loupe", "blur", "pixelate"]);
   const TRASH = "M4 5h10M7.5 5V3.5h3V5M5.5 5l.7 9.5h5.6l.7-9.5";
-  const DRAG_TOOLS = new Set<Tool>(["arrow", "line", "rect", "ellipse", "highlight", "blur", "pixelate"]);
+  const DRAG_TOOLS = new Set<Tool>(["arrow", "line", "rect", "ellipse", "highlight", "spotlight", "loupe", "blur", "pixelate"]);
+  const ICONS = {
+    front: "M9 2l6 3.5-6 3.5-6-3.5zM3 9.5l6 3.5 6-3.5M9 13v3",
+    back: "M9 16l6-3.5-6-3.5-6 3.5zM3 8.5l6-3.5 6 3.5M9 5V2",
+    copy: "M6.5 6.5h8v8h-8zM11.5 6.5v-3h-8v8h3",
+  };
+
+  // Looks a shape can take on top of its color and size, and the shapes that take them.
+  type StyleKey = "fill" | "dash" | "both" | "outline";
+  const STYLES: Record<StyleKey, { label: string; kinds: Tool[]; d: string }> = {
+    fill: { label: "Filled", kinds: ["rect", "ellipse"], d: "M4 4h10v10H4z" },
+    dash: { label: "Dashed", kinds: ["arrow", "line", "rect", "ellipse", "pen"], d: "M2 9h3M7.5 9h3M13 9h3" },
+    both: { label: "Two heads", kinds: ["arrow"], d: "M4 14L14 4M9.5 4H14v4.5M4 9.5V14h4.5" },
+    outline: { label: "Outline", kinds: ["text"], d: "M5 14.5L9 3.5l4 11M6.5 10.5h5M2.5 16.5h13" },
+  };
+  const STYLE_KEYS = Object.keys(STYLES) as StyleKey[];
   const mod = isMac ? "⌘" : "Ctrl+";
   const TURNS: { op: Orient; label: string; d: string }[] = [
     { op: ROTATE_LEFT, label: "Rotate left", d: "M1.5 3v4.5H6M2.9 11.3a6.5 6.5 0 1 0 1.5-6.8L1.5 7.5" },
@@ -119,13 +141,14 @@
   let textBg = $state<boolean>(prefs.textBg ?? false);
   // The color last picked outside the presets.
   let custom = $state<string>(/^#[0-9a-f]{6}$/i.test(prefs.custom) ? prefs.custom : "#af52de");
+  let styles = $state(Object.fromEntries(STYLE_KEYS.map((k) => [k, prefs.styles?.[k] === true])) as Record<StyleKey, boolean>);
 
   // The backdrop carries over too, on or off.
   let lastBackdrop = $state<Backdrop>(parseBackdrop(prefs.lastBackdrop) ?? DEFAULT_BACKDROP);
   let backdropPanel = $state(false);
 
   $effect(() => {
-    const json = JSON.stringify({ sizes, font, bold, textBg, custom, backdrop: scene.backdrop, lastBackdrop });
+    const json = JSON.stringify({ sizes, font, bold, textBg, custom, styles, backdrop: scene.backdrop, lastBackdrop });
     try {
       localStorage.setItem(PREFS, json);
     } catch {
@@ -150,12 +173,15 @@
   // The picked shape, and the scene while it is being dragged or turned. A
   // shape is picked when it is added, or by pressing on it.
   let selected = $state<number | null>(null);
-  const sel = $derived(selected !== null && selected < scene.shapes.length ? selected : null);
   let live = $state.raw<Scene | null>(null);
+  const sel = $derived(selected !== null && selected < (live ?? scene).shapes.length ? selected : null);
   const selShape = $derived(sel !== null ? (live ?? scene).shapes[sel] : null);
-  let moving: { index: number; from: { x: number; y: number } } | null = null;
+  // `copy`: the drag leaves the shape where it is and moves a copy (Alt).
+  let moving: { index: number; from: { x: number; y: number }; copy: boolean } | null = null;
   let rotating: { index: number; cx: number; cy: number; from: number } | null = null;
-  let hover = $state<"move" | "rotate" | null>(null);
+  // `off`: from the handle's point on the shape to where it was pressed.
+  let resizing: { index: number; grip: Grip; off: { x: number; y: number } } | null = null;
+  let cursor = $state<string | null>(null);
 
   $effect(() => {
     void tool;
@@ -203,6 +229,24 @@
     editSelected("text", (s) => (s.kind === "text" ? { ...s, ...change } : s));
   }
 
+  const styleKind = $derived<Tool>(selShape ? selShape.kind : tool);
+  const styleKeys = $derived(STYLE_KEYS.filter((k) => STYLES[k].kinds.includes(styleKind)));
+
+  /** Whether a style is on: for the picked shape, else for the next one drawn. */
+  function styleOn(key: StyleKey) {
+    return selShape ? (selShape as unknown as Record<string, unknown>)[key] === true : styles[key];
+  }
+
+  function setStyle(key: StyleKey, on: boolean) {
+    styles[key] = on;
+    editSelected(`style-${key}`, (s) => (STYLES[key].kinds.includes(s.kind) ? ({ ...s, [key]: on } as Shape) : s));
+  }
+
+  /** The styles that are on for a new shape of `kind`. */
+  function stylesFor(kind: Tool): Partial<Record<StyleKey, boolean>> {
+    return Object.fromEntries(STYLE_KEYS.filter((k) => styles[k] && STYLES[k].kinds.includes(kind)).map((k) => [k, true]));
+  }
+
   /** The shape a press at `p` would move, as its index: the topmost one there. */
   function grabAt(p: { x: number; y: number }) {
     // Strokes and crops start anywhere, also on a shape.
@@ -218,9 +262,40 @@
 
   /** Whether `p` is on the rotate handle of the picked shape. */
   function onHandle(p: { x: number; y: number }) {
-    if (sel === null) return false;
-    const h = handleAt(scene.shapes[sel], scale, 1 / ratio, canvas.width, canvas.height);
+    const s = sel !== null && scene.shapes[sel];
+    if (!s) return false;
+    const h = handleAt(s, scale, 1 / ratio, canvas.width, canvas.height);
     return !!h && Math.hypot(p.x - h[0], p.y - h[1]) <= 9 / ratio;
+  }
+
+  /** The resize handle of the picked shape at `p`. */
+  function gripAt(p: { x: number; y: number }) {
+    const s = sel !== null && scene.shapes[sel];
+    if (!s) return null;
+    return grips(s, scale, 1 / ratio).find((g) => Math.hypot(p.x - g.x, p.y - g.y) <= 7 / ratio) ?? null;
+  }
+
+  /** A copy of a shape; a badge takes the next number. */
+  function copyOf(s: Shape): Shape {
+    return s.kind === "step" ? { ...s, n: nextStep(scene.shapes) } : { ...s };
+  }
+
+  function duplicateSelected() {
+    if (sel === null) return;
+    const by = 12 * scale;
+    commit({ ...scene, shapes: [...scene.shapes, moveShape(copyOf(scene.shapes[sel]), by, by)] });
+    selected = scene.shapes.length - 1;
+  }
+
+  /** Puts the picked shape above every other, or below. */
+  function restack(front: boolean) {
+    if (sel === null) return;
+    const shapes = [...scene.shapes];
+    const [s] = shapes.splice(sel, 1);
+    if (front) shapes.push(s);
+    else shapes.unshift(s);
+    commit({ ...scene, shapes });
+    selected = front ? shapes.length - 1 : 0;
   }
 
   function moveSelected(dx: number, dy: number) {
@@ -245,7 +320,35 @@
     commit({ ...scene, shapes });
   }
 
-  let text = $state<{ x: number; y: number; value: string } | null>(null);
+  // The text being typed: a new one, or shape `index` being changed.
+  type TextStyle = Pick<TextShape, "color" | "size" | "font" | "bold" | "bg" | "outline">;
+  type TextDraft = { x: number; y: number; value: string; style: TextStyle; index: number | null; rot: number };
+  let text = $state<TextDraft | null>(null);
+
+  async function openText(next: TextDraft) {
+    text = next;
+    selected = null;
+    await tick();
+    textArea?.focus();
+    if (next.value) textArea?.select();
+  }
+
+  /** Opens text shape `index` for typing; it is hidden until that is done. */
+  function editText(index: number) {
+    const s = scene.shapes[index];
+    if (s?.kind !== "text") return;
+    const { color, size, font, bold, bg, outline } = s;
+    return openText({ x: s.x, y: s.y, value: s.text, style: { color, size, font, bold, bg, outline }, index, rot: s.rot ?? 0 });
+  }
+
+  function onDoubleClick(e: MouseEvent) {
+    if (tool === "pen" || tool === "crop") return;
+    const p = toImage(e);
+    for (let i = scene.shapes.length - 1; i >= 0; i--) {
+      const s = scene.shapes[i];
+      if (s.kind === "text" && hitShape(s, p.x, p.y, scale, 5 / ratio)) return editText(i);
+    }
+  }
   let textArea = $state<HTMLTextAreaElement>();
   let status = $state("");
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
@@ -352,14 +455,16 @@
       canvas.height = image.height;
     }
     const ctx = canvas.getContext("2d")!;
-    const shown = live ?? scene;
+    const full = live ?? scene;
+    const hidden = text?.index ?? null;
+    const shown = hidden === null ? full : { ...full, shapes: full.shapes.filter((_, i) => i !== hidden) };
     drawScene(ctx, image, shown, scale, draft);
     const crop = cropDraft ?? scene.crop;
     if (crop) drawCropMask(ctx, crop, scale);
     if (sel !== null) {
-      const s = shown.shapes[sel];
+      const s = full.shapes[sel];
       const unit = 1 / ratio;
-      drawSelection(ctx, s, scale, unit, handleAt(s, scale, unit, canvas.width, canvas.height));
+      drawSelection(ctx, s, scale, unit, handleAt(s, scale, unit, canvas.width, canvas.height), grips(s, scale, unit));
     }
   }
 
@@ -425,10 +530,34 @@
       (stage.clientWidth - 32) / (natural.w + pad + inset.left + inset.right),
       (stage.clientHeight - 32) / (natural.h + pad + inset.top + inset.bottom),
     );
-    view = { w: Math.round(natural.w * k), h: Math.round(natural.h * k) };
+    fitK = k;
+    view = { w: Math.round(natural.w * k * zoom), h: Math.round(natural.h * k * zoom) };
   }
 
-  function toImage(e: PointerEvent, clamp = true) {
+  // 1 fits the window; more than that scrolls.
+  let zoom = $state(1);
+  let fitK = 1;
+  let scroller: HTMLElement;
+
+  /** Zooms, keeping the image point at `cx, cy` (the middle of the view when left out) where it is. */
+  async function setZoom(next: number, cx?: number, cy?: number) {
+    if (!image) return;
+    const before = canvas.getBoundingClientRect();
+    const port = scroller.getBoundingClientRect();
+    const x = cx ?? port.left + port.width / 2;
+    const y = cy ?? port.top + port.height / 2;
+    const fx = (x - before.left) / before.width;
+    const fy = (y - before.top) / before.height;
+    // Up to eight screen pixels per pixel of a 1× screenshot.
+    zoom = Math.min(Math.max(next, 1), Math.max(1, 8 / fitK));
+    fit();
+    await tick();
+    const after = canvas.getBoundingClientRect();
+    scroller.scrollLeft += after.left + fx * after.width - x;
+    scroller.scrollTop += after.top + fy * after.height - y;
+  }
+
+  function toImage(e: MouseEvent, clamp = true) {
     const r = canvas.getBoundingClientRect();
     const x = ((e.clientX - r.left) * canvas.width) / r.width;
     const y = ((e.clientY - r.top) * canvas.height) / r.height;
@@ -446,6 +575,13 @@
     backdropPanel = false;
     if (text) commitText();
     const p = toImage(e);
+    const grip = gripAt(p);
+    if (sel !== null && grip) {
+      const [gx, gy] = gripPoint(scene.shapes[sel], grip, scale);
+      canvas.setPointerCapture(e.pointerId);
+      resizing = { index: sel, grip, off: { x: p.x - gx, y: p.y - gy } };
+      return;
+    }
     if (sel !== null && onHandle(p)) {
       const [cx, cy] = shapeCenter(scene.shapes[sel], scale);
       canvas.setPointerCapture(e.pointerId);
@@ -457,7 +593,7 @@
     if (tool === "select" || grabbed !== null) {
       if (grabbed !== null) {
         canvas.setPointerCapture(e.pointerId);
-        moving = { index: grabbed, from: p };
+        moving = { index: grabbed, from: p, copy: e.altKey };
       }
       return;
     }
@@ -468,24 +604,35 @@
       return;
     }
     if (tool === "text") {
-      text = { x: p.x, y: p.y, value: "" };
-      await tick();
-      textArea?.focus();
+      const style = { color, size: sizes.text, font, bold, bg: textBg, outline: styles.outline };
+      await openText({ x: p.x, y: p.y, value: "", style, index: null, rot: 0 });
       return;
     }
     canvas.setPointerCapture(e.pointerId);
     dragFrom = p;
-    if (tool === "pen") draft = { kind: "pen", points: [p.x, p.y], color, size: sizes.pen };
+    if (tool === "pen") draft = { kind: "pen", points: [p.x, p.y], color, size: sizes.pen, ...stylesFor("pen") };
   }
 
   function onPointerMove(e: PointerEvent) {
     if (moving) {
-      const { index, from } = moving;
+      const { index, from, copy } = moving;
       const at = toImage(e);
       const [dx, dy] = [at.x - from.x, at.y - from.y];
       // A click that wobbles is still a click.
       if (!live && Math.hypot(dx, dy) < 3 / ratio) return;
-      live = { ...scene, shapes: scene.shapes.map((s, i) => (i === index ? moveShape(s, dx, dy) : s)) };
+      if (copy) {
+        live = { ...scene, shapes: [...scene.shapes, moveShape(copyOf(scene.shapes[index]), dx, dy)] };
+        selected = scene.shapes.length;
+      } else {
+        live = { ...scene, shapes: scene.shapes.map((s, i) => (i === index ? moveShape(s, dx, dy) : s)) };
+      }
+      return;
+    }
+    if (resizing) {
+      const { index, grip, off } = resizing;
+      const at = toImage(e);
+      const [x, y] = [at.x - off.x, at.y - off.y];
+      live = { ...scene, shapes: scene.shapes.map((s, i) => (i === index ? resizeShape(s, grip, x, y, scale, e.shiftKey) : s)) };
       return;
     }
     if (rotating) {
@@ -497,10 +644,12 @@
       live = { ...scene, shapes: scene.shapes.map((s, i) => (i === index ? rotateShape(s, angle, scale) : s)) };
       return;
     }
-    if (dragFrom) hover = null;
+    if (dragFrom) cursor = null;
     else {
       const at = toImage(e);
-      hover = onHandle(at) ? "rotate" : grabAt(at) !== null ? "move" : null;
+      const grip = gripAt(at);
+      if (grip && sel !== null) cursor = gripCursor(scene.shapes[sel], grip);
+      else cursor = onHandle(at) ? "grab" : grabAt(at) !== null ? "move" : null;
     }
     if (!dragFrom) return;
     const p = toImage(e);
@@ -526,16 +675,18 @@
         y2,
         color: tool === "highlight" && color === "#ff3b30" ? "#ffcc00" : color,
         size: sizes[tool],
+        ...stylesFor(tool),
       };
     }
   }
 
   function onPointerUp() {
-    if (moving || rotating) {
+    if (moving || rotating || resizing) {
       if (live) commit(live);
       live = null;
       moving = null;
       rotating = null;
+      resizing = null;
       return;
     }
     if (cropDraft && cropDraft.w > 4 && cropDraft.h > 4) {
@@ -554,16 +705,26 @@
   }
 
   function commitText() {
-    if (!text) return;
-    const value = text.value.replace(/\s+$/, "");
-    if (value) {
-      commit({
-        ...scene,
-        shapes: [...scene.shapes, { kind: "text", x: text.x, y: text.y, text: value, color, size: sizes.text, font, bold, bg: textBg }],
-      });
-      selected = scene.shapes.length - 1;
-    }
+    const t = text;
+    if (!t) return;
+    // Closing the box blurs it, which lands here again.
     text = null;
+    const value = t.value.replace(/\s+$/, "");
+    const { index } = t;
+    if (index === null) {
+      if (!value) return;
+      commit({ ...scene, shapes: [...scene.shapes, { kind: "text", x: t.x, y: t.y, text: value, ...t.style }] });
+      selected = scene.shapes.length - 1;
+      return;
+    }
+    const was = scene.shapes[index];
+    if (was?.kind !== "text") return;
+    if (!value) {
+      commit({ ...scene, shapes: scene.shapes.filter((_, i) => i !== index) });
+      return;
+    }
+    if (value !== was.text) commit({ ...scene, shapes: scene.shapes.map((s, i) => (i === index ? { ...was, text: value } : s)) });
+    selected = index;
   }
 
   function onTextKey(e: KeyboardEvent) {
@@ -578,7 +739,7 @@
 
   // Display ratio between CSS pixels and image pixels.
   const ratio = $derived(image && view.w ? view.w / image.width : 1);
-  const textFontPx = $derived(sizes.text * scale * ratio);
+  const textFontPx = $derived((text?.style.size ?? sizes.text) * scale * ratio);
 
   // The picked shape's own buttons, in CSS pixels: on the side its rotate handle is not.
   const objectBar = $derived.by(() => {
@@ -586,17 +747,21 @@
     const unit = 1 / ratio;
     const e = selectionExtent(selShape, scale, unit);
     const h = handleAt(selShape, scale, unit, image.width, image.height);
-    const y = !h || h[1] <= e.cy ? e.maxY * ratio + 8 : e.minY * ratio - 38;
+    const y = !h || h[1] <= e.cy ? e.maxY * ratio + 10 : e.minY * ratio - 40;
+    const flip = canFlip(selShape);
+    const half = ((flip ? 6 : 4) * 28 + 8) / 2;
     return {
-      x: Math.min(Math.max(e.cx * ratio, 48), Math.max(48, view.w - 48)),
+      x: Math.min(Math.max(e.cx * ratio, half), Math.max(half, view.w - half)),
       y: Math.min(Math.max(y, 4), Math.max(4, view.h - 34)),
-      flip: canFlip(selShape),
+      flip,
+      first: sel === 0,
+      last: sel === scene.shapes.length - 1,
     };
   });
   const textWidth = $derived.by(() => {
     if (!text) return 0;
     const ctx = document.createElement("canvas").getContext("2d")!;
-    ctx.font = fontCss(font, bold, textFontPx);
+    ctx.font = fontCss(text.style.font, text.style.bold, textFontPx);
     const widest = Math.max(...text.value.split("\n").map((l) => ctx.measureText(l).width));
     return Math.max(textFontPx * 2, widest + textFontPx);
   });
@@ -632,6 +797,11 @@
         p: () => exportImage("pin"),
         w: closeWindow,
         backspace: clearAll,
+        d: duplicateSelected,
+        "=": () => setZoom(zoom * 1.25),
+        "+": () => setZoom(zoom * 1.25),
+        "-": () => setZoom(zoom / 1.25),
+        "0": () => setZoom(1),
       };
       if (action[key]) {
         e.preventDefault();
@@ -643,13 +813,15 @@
       backdropPanel = false;
       return;
     }
-    if (e.key === "Escape" && (moving || rotating)) {
+    if (e.key === "Escape" && (moving || rotating || resizing)) {
+      if (moving?.copy) selected = moving.index;
       live = null;
       moving = null;
       rotating = null;
+      resizing = null;
       return;
     }
-    if (sel !== null && !moving && !rotating) {
+    if (sel !== null && !moving && !rotating && !resizing) {
       const field = e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
       const step = (e.shiftKey ? 10 : 1) * scale;
       const nudge: Record<string, [number, number]> = {
@@ -665,6 +837,11 @@
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         removeSelected();
+        return;
+      }
+      if (e.key === "Enter" && textSel && !(e.target instanceof HTMLButtonElement)) {
+        e.preventDefault();
+        editText(sel);
         return;
       }
       if (nudge[e.key] && !field) {
@@ -687,6 +864,23 @@
 
   onMount(() => {
     let observer: ResizeObserver | undefined;
+    // Pinch, or the wheel with Ctrl or ⌘, zooms at the pointer.
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+    };
+    // WebKit reports a pinch as gesture events instead.
+    let pinchFrom = 1;
+    const onGesture = (e: Event) => {
+      e.preventDefault();
+      const g = e as Event & { scale: number; clientX: number; clientY: number };
+      if (e.type === "gesturestart") pinchFrom = zoom;
+      else setZoom(pinchFrom * g.scale, g.clientX, g.clientY);
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    scroller.addEventListener("gesturestart", onGesture);
+    scroller.addEventListener("gesturechange", onGesture);
     (async () => {
       const info = await invoke<{ width: number; height: number; scale: number } | null>("shot_info", { id });
       if (!info) return closeWindow();
@@ -702,7 +896,12 @@
       flash(String(e));
       ready();
     });
-    return () => observer?.disconnect();
+    return () => {
+      observer?.disconnect();
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener("gesturestart", onGesture);
+      scroller.removeEventListener("gesturechange", onGesture);
+    };
   });
 </script>
 
@@ -725,6 +924,7 @@
 
 <div class="app">
   <header>
+    <div class="bar">
     <div class="group" role="toolbar" aria-label={tr("Tools")}>
       {@render toolButtons("pick")}
       <span class="rule"></span>
@@ -740,57 +940,6 @@
       >
         <svg viewBox="0 0 18 18"><path d="M2 9s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5zM3 15L15 3" /></svg>
       </button>
-    </div>
-
-    <div class="group" role="radiogroup" aria-label={tr("Color")}>
-      {#each COLORS as c (c)}
-        <button
-          class="swatch"
-          class:active={shownColor === c}
-          style="--c:{c}"
-          title={c}
-          aria-label={tr("Color {c}", { c })}
-          aria-pressed={shownColor === c}
-          onclick={() => setColor(c)}
-        ></button>
-      {/each}
-      <label class="swatch custom" class:active={customShown} style="--c:{customShown ? shownColor : custom}" title={tr("Custom color")}>
-        <input
-          type="color"
-          aria-label={tr("Custom color")}
-          value={customShown ? shownColor : custom}
-          onclick={() => setColor(custom)}
-          oninput={(e) => {
-            custom = e.currentTarget.value;
-            setColor(custom);
-          }}
-        />
-      </label>
-    </div>
-
-    <div class="group size" class:off={!sizeSpec}>
-      <label
-        title={sizeSpec
-          ? tr("{label} (1 2 3, [ ]; double-click to reset)", { label: tr(sizeSpec.label) })
-          : tr("This tool has no size")}
-        ondblclick={() => sizeSpec && setSize(sizeSpec.presets[1])}
-      >
-        <span class="muted">{tr(sizeSpec?.label ?? "Size")}</span>
-        {#if sizeSpec}
-          <input
-            type="range"
-            min={sizeSpec.min}
-            max={sizeSpec.max}
-            step="1"
-            value={sizeValue}
-            oninput={(e) => setSize(Number(e.currentTarget.value))}
-          />
-          <span class="value">{sizeValue}</span>
-        {:else}
-          <input type="range" disabled />
-          <span class="value">–</span>
-        {/if}
-      </label>
     </div>
 
     <div class="group backdrop-group" role="toolbar" aria-label={tr("Image")}>
@@ -886,8 +1035,78 @@
         <svg viewBox="0 0 18 18"><path d={TRASH} /></svg>
       </button>
     </div>
+    </div>
 
-    <!-- Last, so the rest of the bar stays put when these come and go. -->
+    <!-- How the tool, or the picked shape, looks. -->
+    <div class="bar options">
+    <div class="group" role="radiogroup" aria-label={tr("Color")}>
+      {#each COLORS as c (c)}
+        <button
+          class="swatch"
+          class:active={shownColor === c}
+          style="--c:{c}"
+          title={c}
+          aria-label={tr("Color {c}", { c })}
+          aria-pressed={shownColor === c}
+          onclick={() => setColor(c)}
+        ></button>
+      {/each}
+      <label class="swatch custom" class:active={customShown} style="--c:{customShown ? shownColor : custom}" title={tr("Custom color")}>
+        <input
+          type="color"
+          aria-label={tr("Custom color")}
+          value={customShown ? shownColor : custom}
+          onclick={() => setColor(custom)}
+          oninput={(e) => {
+            custom = e.currentTarget.value;
+            setColor(custom);
+          }}
+        />
+      </label>
+    </div>
+
+    <div class="group size" class:off={!sizeSpec}>
+      <label
+        title={sizeSpec
+          ? tr("{label} (1 2 3, [ ]; double-click to reset)", { label: tr(sizeSpec.label) })
+          : tr("This tool has no size")}
+        ondblclick={() => sizeSpec && setSize(sizeSpec.presets[1])}
+      >
+        <span class="muted">{tr(sizeSpec?.label ?? "Size")}</span>
+        {#if sizeSpec}
+          <input
+            type="range"
+            min={sizeSpec.min}
+            max={sizeSpec.max}
+            step="1"
+            value={sizeValue}
+            oninput={(e) => setSize(Number(e.currentTarget.value))}
+          />
+          <span class="value">{sizeValue}</span>
+        {:else}
+          <input type="range" disabled />
+          <span class="value">–</span>
+        {/if}
+      </label>
+    </div>
+
+    <!-- Last, so the color and size stay put when these come and go. -->
+    {#if styleKeys.length}
+      <div class="group" role="toolbar" aria-label={tr("Style")}>
+        {#each styleKeys as k (k)}
+          <button
+            class="icon"
+            class:active={styleOn(k)}
+            title={tr(STYLES[k].label)}
+            aria-label={tr(STYLES[k].label)}
+            aria-pressed={styleOn(k)}
+            onclick={() => setStyle(k, !styleOn(k))}
+          >
+            <svg viewBox="0 0 18 18" class:filled={k === "fill"}><path d={STYLES[k].d} /></svg>
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if tool === "text" || textSel}
       <div class="group">
         <select
@@ -921,9 +1140,11 @@
         </button>
       </div>
     {/if}
+    </div>
   </header>
 
   <main bind:this={stage}>
+    <div class="scroller" bind:this={scroller}>
     <div
       class="backdrop"
       class:clear={scene.backdrop?.fill === "clear"}
@@ -947,15 +1168,16 @@
           bind:this={canvas}
           class:text-tool={tool === "text"}
           class:select-tool={tool === "select"}
-          class:over={hover === "move"}
-          class:turn={hover === "rotate"}
           style="width:{view.w}px; height:{view.h}px"
           style:border-radius={preview?.screenRadius ?? "0"}
+          style:cursor={cursor}
+          ondblclick={onDoubleClick}
           onpointerdown={onPointerDown}
           onpointermove={onPointerMove}
           onpointerup={onPointerUp}
         ></canvas>
         {#if text}
+          {@const st = text.style}
           <textarea
             bind:this={textArea}
             bind:value={text.value}
@@ -963,10 +1185,12 @@
             wrap="off"
             spellcheck="false"
             aria-label={tr("Text")}
-            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{textBg ? badgeText(color) : color}; font:{fontCss(font, bold, textFontPx)}; line-height:1.25"
-            style:background={textBg ? color : undefined}
-            style:box-shadow={textBg ? `0 0 0 ${textPad(textFontPx)}px ${color}` : undefined}
-            style:border-radius={textBg ? `${textFontPx * 0.05}px` : undefined}
+            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{st.bg ? badgeText(st.color) : st.color}; font:{fontCss(st.font, st.bold, textFontPx)}; line-height:1.25"
+            style:background={st.bg ? st.color : undefined}
+            style:box-shadow={st.bg ? `0 0 0 ${textPad(textFontPx)}px ${st.color}` : undefined}
+            style:border-radius={st.bg ? `${textFontPx * 0.05}px` : undefined}
+            style:transform={text.rot ? `rotate(${text.rot}rad)` : undefined}
+            style:transform-origin="{Math.max(0, textWidth - textFontPx) / 2}px 50%"
             onkeydown={onTextKey}
             onblur={commitText}
           ></textarea>
@@ -981,6 +1205,15 @@
                 <svg viewBox="0 0 18 18"><path d={TURNS[3].d} /></svg>
               </button>
             {/if}
+            <button class="icon" title={tr("Bring to front")} aria-label={tr("Bring to front")} disabled={objectBar.last} onclick={() => restack(true)}>
+              <svg viewBox="0 0 18 18"><path d={ICONS.front} /></svg>
+            </button>
+            <button class="icon" title={tr("Send to back")} aria-label={tr("Send to back")} disabled={objectBar.first} onclick={() => restack(false)}>
+              <svg viewBox="0 0 18 18"><path d={ICONS.back} /></svg>
+            </button>
+            <button class="icon" title="{tr('Duplicate')} ({mod}D)" aria-label={tr("Duplicate")} onclick={duplicateSelected}>
+              <svg viewBox="0 0 18 18"><path d={ICONS.copy} /></svg>
+            </button>
             <button class="icon" title="{tr('Delete')} (⌫)" aria-label={tr("Delete")} onclick={removeSelected}>
               <svg viewBox="0 0 18 18"><path d={TRASH} /></svg>
             </button>
@@ -989,12 +1222,22 @@
       </div>
       </div>
     </div>
+    </div>
     {#if status}
       <div class="status" role="status">{status}</div>
     {/if}
   </main>
 
   <footer>
+    <div class="group zoom">
+      <button class="icon" title="{tr('Zoom out')} ({mod}−)" aria-label={tr("Zoom out")} disabled={zoom <= 1} onclick={() => setZoom(zoom / 1.25)}>
+        <svg viewBox="0 0 18 18"><path d="M4 9h10" /></svg>
+      </button>
+      <button class="percent" title="{tr('Fit to window')} ({mod}0)" onclick={() => setZoom(1)}>{Math.round(ratio * scale * 100)}%</button>
+      <button class="icon" title="{tr('Zoom in')} ({mod}+)" aria-label={tr("Zoom in")} onclick={() => setZoom(zoom * 1.25)}>
+        <svg viewBox="0 0 18 18"><path d="M4 9h10M9 4v10" /></svg>
+      </button>
+    </div>
     <div class="group actions">
       <!-- Linux has no system share sheet. -->
       {#if !isLinux}
@@ -1024,13 +1267,21 @@
     height: 100vh;
   }
   header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 6px 14px;
     padding: 8px 12px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
+  }
+  .bar.options {
+    /* As tall with only the colors in it as with buttons. */
+    min-height: 41px;
+    padding: 5px 12px;
+    border-top: 1px solid var(--border);
   }
   .group {
     display: flex;
@@ -1039,7 +1290,7 @@
   }
   footer {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     padding: 8px 12px;
     background: var(--panel);
     border-top: 1px solid var(--border);
@@ -1157,12 +1408,27 @@
     background: var(--accent);
     filter: brightness(1.1);
   }
+  .percent {
+    min-width: 52px;
+    padding: 0 6px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Auto margins center the image, and let all of it be scrolled to once it is larger than the view. */
+  .scroller {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    padding: 16px;
+    overflow: auto;
+  }
+  .backdrop {
+    margin: auto;
+  }
   main {
     position: relative;
     flex: 1;
     min-height: 0;
-    display: grid;
-    place-items: center;
     background: var(--bg);
     background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
     background-size: 16px 16px;
@@ -1259,12 +1525,6 @@
   }
   canvas.select-tool {
     cursor: default;
-  }
-  canvas.over {
-    cursor: move;
-  }
-  canvas.turn {
-    cursor: grab;
   }
   .rule {
     width: 1px;

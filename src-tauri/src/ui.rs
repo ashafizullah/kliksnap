@@ -718,8 +718,9 @@ pub fn open_editor(
     );
     let area = work_area(app, b);
     let (max_w, max_h) = area.logical_size();
-    const TOOLBAR: f64 = 52.0;
-    // Wide enough for the toolbar on one row, never larger than the screen.
+    // The tools, the options under them and the actions at the bottom.
+    const TOOLBAR: f64 = 136.0;
+    // Wide enough for the tools on one row, never larger than the screen.
     let w = (img_w as f64 / b.scale + 48.0).max(1000.0).min(max_w * 0.9);
     let h = (img_h as f64 / b.scale + TOOLBAR + 48.0)
         .max(400.0)

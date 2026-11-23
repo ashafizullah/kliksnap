@@ -8,6 +8,8 @@ export type Tool =
   | "text"
   | "step"
   | "highlight"
+  | "spotlight"
+  | "loupe"
   | "blur"
   | "pixelate"
   | "crop";
@@ -22,6 +24,11 @@ export type DragShape = {
   size: number;
   /** Turned by this many radians about its center (boxes only; lines turn their ends). */
   rot?: number;
+  /** Rectangles and ellipses: filled, not outlined. */
+  fill?: boolean;
+  dash?: boolean;
+  /** Arrows: a head at both ends. */
+  both?: boolean;
 };
 
 export type TextShape = {
@@ -39,6 +46,8 @@ export type TextShape = {
   /** Mirrored about its center. */
   flipX?: boolean;
   flipY?: boolean;
+  /** A contrasting edge around the letters. */
+  outline?: boolean;
 };
 
 /** How far a text's background box reaches past its text, for a font size. */
@@ -48,7 +57,7 @@ export const textPad = (fontPx: number) => fontPx * 0.25;
 export type StepShape = { kind: "step"; x: number; y: number; n: number; color: string; size: number };
 
 /** A freehand stroke; `points` holds x, y pairs. */
-export type PenShape = { kind: "pen"; points: number[]; color: string; size: number };
+export type PenShape = { kind: "pen"; points: number[]; color: string; size: number; dash?: boolean };
 
 export type Shape = DragShape | PenShape | TextShape | StepShape;
 
@@ -178,6 +187,7 @@ export const SIZES: Partial<Record<Tool, SizeSpec>> = {
   pen: STROKE,
   text: { label: "Font size", min: 10, max: 96, presets: [16, 24, 36] },
   step: { label: "Size", min: 8, max: 40, presets: [10, 14, 20] },
+  loupe: STROKE,
   blur: { label: "Strength", min: 2, max: 30, presets: [6, 12, 20] },
   pixelate: { label: "Block size", min: 3, max: 30, presets: [5, 8, 14] },
 };

@@ -1,6 +1,8 @@
 import {
   FILLS,
+  SIZES,
   badgeText,
+  constrain,
   fontCss,
   normalize,
   textPad,
@@ -91,7 +93,7 @@ export function shapeBounds(s: Shape, scale: number): Rect {
     return { x: s.x - pad, y: s.y - pad, w: box.w + 2 * pad, h: box.h + 2 * pad };
   }
   const r = normalize(s.x1, s.y1, s.x2, s.y2);
-  if (s.kind === "highlight" || s.kind === "blur" || s.kind === "pixelate") return r;
+  if (s.kind === "highlight" || s.kind === "blur" || s.kind === "pixelate" || s.kind === "spotlight") return r;
   return { x: r.x - half, y: r.y - half, w: r.w + 2 * half, h: r.h + 2 * half };
 }
 
@@ -105,8 +107,9 @@ export function shapeCenter(s: Shape, scale: number): [number, number] {
   return [b.x + b.w / 2, b.y + b.h / 2];
 }
 
-/** Blurs and pixelation hide what is under them and badges are round: turning them does nothing. */
-export const canRotate = (s: Shape) => s.kind !== "blur" && s.kind !== "pixelate" && s.kind !== "step";
+/** Blurs, pixelation, spotlights and magnifiers act on what is under them, and badges are round: these don't turn. */
+export const canRotate = (s: Shape) =>
+  s.kind !== "blur" && s.kind !== "pixelate" && s.kind !== "step" && s.kind !== "spotlight" && s.kind !== "loupe";
 
 /** Whether mirroring a shape changes how it looks. */
 export const canFlip = (s: Shape) =>
@@ -135,7 +138,7 @@ export function rotateShape(s: Shape, angle: number, scale: number): Shape {
 
 /** `s` mirrored about its center, left to right when `horizontal`, else top to bottom. */
 export function flipShape(s: Shape, horizontal: boolean, scale: number): Shape {
-  if (s.kind === "step" || s.kind === "blur" || s.kind === "pixelate") return s;
+  if (s.kind === "step" || !canRotate(s)) return s;
   if (s.kind === "text") {
     const flipped = horizontal ? { flipX: !s.flipX } : { flipY: !s.flipY };
     return { ...s, ...flipped, rot: -(s.rot ?? 0) };
@@ -185,14 +188,15 @@ export function hitShape(s: Shape, x: number, y: number, scale: number, tol: num
   if (s.kind === "rect") {
     const r = normalize(s.x1, s.y1, s.x2, s.y2);
     const inner = x > r.x + reach && x < r.x + r.w - reach && y > r.y + reach && y < r.y + r.h - reach;
-    return inside(tol) && !inner;
+    return inside(tol) && (!!s.fill || !inner);
   }
-  if (s.kind === "ellipse") {
+  if (s.kind === "ellipse" || s.kind === "loupe") {
     const r = normalize(s.x1, s.y1, s.x2, s.y2);
     const rx = r.w / 2;
     const ry = r.h / 2;
     if (rx < 1 || ry < 1) return inside(tol);
     const d = Math.hypot((x - r.x - rx) / rx, (y - r.y - ry) / ry);
+    if (s.kind === "loupe" || s.fill) return (d - 1) * Math.min(rx, ry) <= reach;
     return Math.abs(d - 1) * Math.min(rx, ry) <= reach;
   }
   return inside(tol);
@@ -207,7 +211,8 @@ const HANDLE_REACH = 20;
  * the shape, or below when that would put it off a `w`×`h` image.
  */
 export function handleAt(s: Shape, scale: number, unit: number, w: number, h: number): [number, number] | null {
-  if (!canRotate(s)) return null;
+  // Lines turn by their ends.
+  if (!canRotate(s) || s.kind === "line" || s.kind === "arrow") return null;
   const b = shapeBounds(s, scale);
   const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
   const reach = b.h / 2 + (SELECTION_PAD + HANDLE_REACH) * unit;
@@ -230,13 +235,128 @@ export function selectionExtent(s: Shape, scale: number, unit: number) {
   return { cx, cy, minX: cx - hw, maxX: cx + hw, minY: cy - hh, maxY: cy + hh };
 }
 
-/** Marks the selected shape and its rotate handle (editing view only). */
+/** A resize handle: an end of a line, or a corner or side of a box (`hx`, `hy` are -1, 0 or 1). */
+export type Grip = { x: number; y: number; hx: number; hy: number; end?: 1 | 2 };
+
+/** The box resizing works on: the drawn rectangle, without the stroke around it. */
+function core(s: Shape, scale: number): Rect {
+  return s.kind === "pen" || s.kind === "text" || s.kind === "step" ? shapeBounds(s, scale) : normalize(s.x1, s.y1, s.x2, s.y2);
+}
+
+/** The resize handles of a selected shape, where they are drawn. `unit` is image pixels per CSS pixel. */
+export function grips(s: Shape, scale: number, unit: number): Grip[] {
+  if (s.kind === "line" || s.kind === "arrow") {
+    return [
+      { x: s.x1, y: s.y1, hx: 0, hy: 0, end: 1 },
+      { x: s.x2, y: s.y2, hx: 0, hy: 0, end: 2 },
+    ];
+  }
+  const b = shapeBounds(s, scale);
+  const pad = SELECTION_PAD * unit;
+  const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+  const cos = Math.cos(spin(s));
+  const sin = Math.sin(spin(s));
+  // Text and badges keep their shape, and short sides have no room for a handle.
+  const sides = s.kind !== "text" && s.kind !== "step";
+  const out: Grip[] = [];
+  for (const hy of [-1, 0, 1]) {
+    for (const hx of [-1, 0, 1]) {
+      if (!hx && !hy) continue;
+      if ((!hx || !hy) && !sides) continue;
+      if (!hx && b.w < 28 * unit) continue;
+      if (!hy && b.h < 28 * unit) continue;
+      const lx = hx * (b.w / 2 + pad);
+      const ly = hy * (b.h / 2 + pad);
+      out.push({ x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos, hx, hy });
+    }
+  }
+  return out;
+}
+
+/** The point of the shape a handle stands for. */
+export function gripPoint(s: Shape, g: Grip, scale: number): [number, number] {
+  if (s.kind === "line" || s.kind === "arrow") return g.end === 1 ? [s.x1, s.y1] : [s.x2, s.y2];
+  const b = core(s, scale);
+  const cos = Math.cos(spin(s));
+  const sin = Math.sin(spin(s));
+  const lx = (g.hx * b.w) / 2;
+  const ly = (g.hy * b.h) / 2;
+  return [b.x + b.w / 2 + lx * cos - ly * sin, b.y + b.h / 2 + lx * sin + ly * cos];
+}
+
+/** The cursor for a handle: the resize arrow nearest the way it pulls. */
+export function gripCursor(s: Shape, g: Grip) {
+  if (g.end) return "crosshair";
+  const turns = Math.round((Math.atan2(g.hy, g.hx) + spin(s)) / (Math.PI / 4));
+  return ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][((turns % 4) + 4) % 4];
+}
+
+/**
+ * `s` with handle `g` pulled to `px, py`; the opposite corner, side or end
+ * stays put. Shift keeps the proportions of a box, and lines to steps of 45°.
+ */
+export function resizeShape(s: Shape, g: Grip, px: number, py: number, scale: number, shift: boolean): Shape {
+  if (s.kind === "line" || s.kind === "arrow") {
+    const [ox, oy] = g.end === 1 ? [s.x2, s.y2] : [s.x1, s.y1];
+    const [x, y] = shift ? constrain(s.kind, ox, oy, px, py) : [px, py];
+    return g.end === 1 ? { ...s, x1: x, y1: y } : { ...s, x2: x, y2: y };
+  }
+  const b = core(s, scale);
+  const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+  const cos = Math.cos(spin(s));
+  const sin = Math.sin(spin(s));
+  const world = (x: number, y: number): [number, number] => [x * cos - y * sin, x * sin + y * cos];
+  const [ox, oy] = world((-g.hx * b.w) / 2, (-g.hy * b.h) / 2);
+  // The fixed point, and the pull from it in the shape's own frame.
+  const [ax, ay] = [cx + ox, cy + oy];
+  let dx = (px - ax) * cos + (py - ay) * sin;
+  let dy = -(px - ax) * sin + (py - ay) * cos;
+
+  if (s.kind === "text" || s.kind === "step") {
+    const spec = SIZES[s.kind]!;
+    const k = Math.max(b.w ? (g.hx * dx) / b.w : 0, b.h ? (g.hy * dy) / b.h : 0);
+    const size = Math.min(spec.max, Math.max(spec.min, Math.round(s.size * k)));
+    const sized = { ...s, size };
+    const nb = shapeBounds(sized, scale);
+    const [mx, my] = world((g.hx * nb.w) / 2, (g.hy * nb.h) / 2);
+    if (sized.kind === "step") return { ...sized, x: ax + mx, y: ay + my };
+    const box = textBox(sized, scale);
+    return { ...sized, x: ax + mx - box.w / 2, y: ay + my - box.h / 2 };
+  }
+  if (s.kind === "pen") {
+    // Scale the stroke's points, not the width around them: the box is that much larger on every side.
+    const half = (s.size * scale) / 2;
+    const [rw, rh] = [b.w - 2 * half, b.h - 2 * half];
+    const [px0, py0] = [ax + g.hx * half, ay + g.hy * half];
+    let kx = g.hx && rw > 1e-6 ? (dx - 2 * g.hx * half) / (g.hx * rw) : 1;
+    let ky = g.hy && rh > 1e-6 ? (dy - 2 * g.hy * half) / (g.hy * rh) : 1;
+    if (shift && g.hx && g.hy) {
+      const k = Math.max(Math.abs(kx), Math.abs(ky));
+      kx = Math.sign(kx || 1) * k;
+      ky = Math.sign(ky || 1) * k;
+    }
+    return { ...s, points: s.points.map((v, i) => (i % 2 ? py0 + (v - py0) * ky : px0 + (v - px0) * kx)) };
+  }
+  if (shift && g.hx && g.hy && b.w && b.h) {
+    const k = Math.max(Math.abs(dx) / b.w, Math.abs(dy) / b.h);
+    dx = Math.sign(dx || 1) * b.w * k;
+    dy = Math.sign(dy || 1) * b.h * k;
+  }
+  const w = g.hx ? Math.abs(dx) : b.w;
+  const h = g.hy ? Math.abs(dy) : b.h;
+  const [mx, my] = world(g.hx ? dx / 2 : 0, g.hy ? dy / 2 : 0);
+  const [nx, ny] = [ax + mx, ay + my];
+  return { ...s, x1: nx - w / 2, y1: ny - h / 2, x2: nx + w / 2, y2: ny + h / 2 };
+}
+
+/** Marks the selected shape with its resize and rotate handles (editing view only). */
 export function drawSelection(
   ctx: CanvasRenderingContext2D,
   s: Shape,
   scale: number,
   unit: number,
   handle: [number, number] | null,
+  handles: Grip[] = [],
 ) {
   const b = shapeBounds(s, scale);
   const pad = SELECTION_PAD * unit;
@@ -250,7 +370,8 @@ export function drawSelection(
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(spin(s));
-  for (const [color, dash] of strokes) {
+  // A line shows by its ends alone.
+  for (const [color, dash] of s.kind === "line" || s.kind === "arrow" ? [] : strokes) {
     ctx.strokeStyle = color;
     ctx.setLineDash(dash);
     ctx.strokeRect(-b.w / 2 - pad, -b.h / 2 - pad, b.w + 2 * pad, b.h + 2 * pad);
@@ -270,6 +391,17 @@ export function drawSelection(
     ctx.fillStyle = "#ffffff";
     ctx.fill();
     ctx.lineWidth = 1.5 * unit;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "#007aff";
+  ctx.fillStyle = "#ffffff";
+  ctx.lineWidth = 1.5 * unit;
+  const half = 4 * unit;
+  for (const g of handles) {
+    ctx.beginPath();
+    if (g.end) ctx.arc(g.x, g.y, half * 1.2, 0, Math.PI * 2);
+    else ctx.rect(g.x - half, g.y - half, 2 * half, 2 * half);
+    ctx.fill();
     ctx.stroke();
   }
   ctx.restore();
@@ -314,22 +446,76 @@ function pen(ctx: CanvasRenderingContext2D, pts: number[]) {
   ctx.stroke();
 }
 
-function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number) {
+function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, width: number, both: boolean) {
   const angle = Math.atan2(y2 - y1, x2 - x1);
-  const head = Math.min(Math.max(width * 3.5, 12), Math.hypot(x2 - x1, y2 - y1));
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  const head = Math.min(Math.max(width * 3.5, 12), both ? len / 2 : len);
   const spread = 0.42;
-  const baseX = x2 - Math.cos(angle) * head * 0.85;
-  const baseY = y2 - Math.sin(angle) * head * 0.85;
+  const back = head * 0.85;
+  const [cos, sin] = [Math.cos(angle), Math.sin(angle)];
   ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(baseX, baseY);
+  ctx.moveTo(both ? x1 + cos * back : x1, both ? y1 + sin * back : y1);
+  ctx.lineTo(x2 - cos * back, y2 - sin * back);
   ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x2, y2);
-  ctx.lineTo(x2 - Math.cos(angle - spread) * head, y2 - Math.sin(angle - spread) * head);
-  ctx.lineTo(x2 - Math.cos(angle + spread) * head, y2 - Math.sin(angle + spread) * head);
-  ctx.closePath();
+  const tip = (x: number, y: number, a: number) => {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - Math.cos(a - spread) * head, y - Math.sin(a - spread) * head);
+    ctx.lineTo(x - Math.cos(a + spread) * head, y - Math.sin(a + spread) * head);
+    ctx.closePath();
+    ctx.fill();
+  };
+  tip(x2, y2, angle);
+  if (both) tip(x1, y1, angle + Math.PI);
+}
+
+/** Shows what is under an ellipse at twice its size, inside a ring. */
+function loupe(ctx: CanvasRenderingContext2D, base: CanvasImageSource, r: Rect, width: number, scale: number) {
+  if (r.w < 2 || r.h < 2) return;
+  const [cx, cy] = [r.x + r.w / 2, r.y + r.h / 2];
+  const ring = () => {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+  };
+  ctx.save();
+  ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+  ctx.shadowBlur = 10 * scale;
+  ctx.shadowOffsetY = 3 * scale;
+  ctx.fillStyle = "#000000";
+  ring();
   ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ring();
+  ctx.clip();
+  // Always the original pixels, like blur: other annotations don't show in it.
+  ctx.drawImage(base, cx - r.w / 4, cy - r.h / 4, r.w / 2, r.h / 2, r.x, r.y, r.w, r.h);
+  ctx.restore();
+  ctx.lineWidth = width;
+  ring();
+  ctx.stroke();
+}
+
+let dimmer: HTMLCanvasElement | null = null;
+
+/** Darkens the image outside the spotlights. */
+function dim(ctx: CanvasRenderingContext2D, w: number, h: number, spots: Shape[], scale: number) {
+  dimmer ??= document.createElement("canvas");
+  dimmer.width = w;
+  dimmer.height = h;
+  const d = dimmer.getContext("2d")!;
+  d.fillStyle = "rgba(0, 0, 0, 0.6)";
+  d.fillRect(0, 0, w, h);
+  d.globalCompositeOperation = "destination-out";
+  d.fillStyle = "#000000";
+  for (const s of spots) {
+    if (s.kind !== "spotlight") continue;
+    const r = normalize(s.x1, s.y1, s.x2, s.y2);
+    d.beginPath();
+    d.roundRect(r.x, r.y, r.w, r.h, 6 * scale);
+    d.fill();
+  }
+  ctx.drawImage(dimmer, 0, 0);
 }
 
 /** `scale` converts the logical sizes stored on shapes into image pixels. */
@@ -351,7 +537,14 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
     ctx.translate(-cx, -cy);
   }
 
-  if (s.kind === "pixelate") {
+  if ((s.kind === "pen" || s.kind === "line" || s.kind === "arrow" || s.kind === "rect" || s.kind === "ellipse") && s.dash) {
+    ctx.setLineDash([width * 2.5, width * 2.2]);
+  }
+  if (s.kind === "spotlight") {
+    // Drawn by the scene, under every shape.
+  } else if (s.kind === "loupe") {
+    loupe(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), width, scale);
+  } else if (s.kind === "pixelate") {
     pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(2, s.size * scale));
   } else if (s.kind === "blur") {
     blur(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(1, s.size * scale));
@@ -377,7 +570,14 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
         ctx.shadowColor = "transparent";
         ctx.fillStyle = badgeText(s.color);
       }
-      s.text.split("\n").forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fontSize * 1.25));
+      const lines = s.text.split("\n");
+      if (s.outline && !s.bg) {
+        ctx.strokeStyle = badgeText(s.color);
+        ctx.lineWidth = fontSize * 0.16;
+        lines.forEach((line, i) => ctx.strokeText(line, s.x, s.y + i * fontSize * 1.25));
+        ctx.shadowColor = "transparent";
+      }
+      lines.forEach((line, i) => ctx.fillText(line, s.x, s.y + i * fontSize * 1.25));
     } else if (s.kind === "step") {
       const r = s.size * scale;
       ctx.beginPath();
@@ -393,7 +593,7 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
     } else if (s.kind === "pen") {
       pen(ctx, s.points);
     } else if (s.kind === "arrow") {
-      arrow(ctx, s.x1, s.y1, s.x2, s.y2, width);
+      arrow(ctx, s.x1, s.y1, s.x2, s.y2, width, !!s.both);
     } else if (s.kind === "line") {
       ctx.beginPath();
       ctx.moveTo(s.x1, s.y1);
@@ -403,12 +603,14 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
       const r = normalize(s.x1, s.y1, s.x2, s.y2);
       ctx.beginPath();
       ctx.roundRect(r.x, r.y, r.w, r.h, 2 * scale);
-      ctx.stroke();
+      if (s.fill) ctx.fill();
+      else ctx.stroke();
     } else if (s.kind === "ellipse") {
       const r = normalize(s.x1, s.y1, s.x2, s.y2);
       ctx.beginPath();
       ctx.ellipse(r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
-      ctx.stroke();
+      if (s.fill) ctx.fill();
+      else ctx.stroke();
     }
   }
   ctx.restore();
@@ -422,6 +624,8 @@ export function drawScene(
   extra: Shape | null = null,
 ) {
   ctx.drawImage(base, 0, 0);
+  const spots = [...scene.shapes, ...(extra ? [extra] : [])].filter((s) => s.kind === "spotlight");
+  if (spots.length) dim(ctx, base.width, base.height, spots, scale);
   for (const s of scene.shapes) drawShape(ctx, base, s, scale);
   if (extra) drawShape(ctx, base, extra, scale);
 }

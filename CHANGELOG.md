@@ -3,6 +3,23 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.20.0
+
+### Added
+
+- Resize an annotation by the handles on its corners and sides; arrows and lines by their ends. `Shift` keeps the proportions. Pulling a corner of text or a number changes its size
+- Change text after placing it: double-click it, or press `Enter` while it is picked
+- Duplicate an annotation with `⌘D` / `Ctrl+D`, the button next to it, or by dragging it with `⌥` / `Alt` held
+- Zoom in the editor: `⌘+` / `⌘−` / `⌘0`, the buttons at the bottom left, or pinch (`Ctrl` + scroll) where the pointer is
+- Spotlight (`S`) darkens everything but the areas you mark, and Magnifier (`M`) enlarges what is under it
+- Styles: filled rectangles and ellipses, dashed lines, arrows with two heads, and an outline around text
+- Bring an annotation to the front or send it to the back
+
+### Changed
+
+- The editor toolbar has two rows: the tools, and under them the color, size and style of the tool or of the picked annotation
+- Arrows and lines turn by dragging their ends, and no longer have a rotate handle
+
 ## 0.19.0
 
 ### Added
