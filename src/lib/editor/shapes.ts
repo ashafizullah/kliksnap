@@ -20,6 +20,8 @@ export type DragShape = {
   y2: number;
   color: string;
   size: number;
+  /** Turned by this many radians about its center (boxes only; lines turn their ends). */
+  rot?: number;
 };
 
 export type TextShape = {
@@ -33,6 +35,10 @@ export type TextShape = {
   bold: boolean;
   /** A filled box in `color` behind the text, which then turns black or white. */
   bg?: boolean;
+  rot?: number;
+  /** Mirrored about its center. */
+  flipX?: boolean;
+  flipY?: boolean;
 };
 
 /** How far a text's background box reaches past its text, for a font size. */
