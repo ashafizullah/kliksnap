@@ -3,6 +3,20 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.19.0
+
+### Added
+
+- Rotate an annotation: drag the round handle above the picked one (`Shift` turns in steps of 15°). Arrows, lines, boxes, ellipses, pen strokes, text and highlights turn
+- Flip an annotation, or delete it, from the small bar that appears next to the picked one
+- Any color: the rainbow swatch at the end of the colors opens the system color picker
+
+### Changed
+
+- Every annotation can be dragged with any tool, not just the one added last. Pen and Crop still start anywhere, and older highlights, blurs and pixelations move with Select (`V`)
+- Color, size, font, Bold and text background now also change the picked annotation
+- The editor toolbar is grouped: Select, drawing tools, hiding tools, then color and size. Crop, rotate, flip and background, which act on the whole screenshot, sit together under "Image"
+
 ## 0.18.0
 
 ### Added

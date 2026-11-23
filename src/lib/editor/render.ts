@@ -56,14 +56,16 @@ export function turnShape(s: Shape, m: Orient, w: number, h: number, scale: numb
     const [x, y] = at(s.x, s.y);
     return { ...s, x, y };
   }
+  // A mirrored image turns its shapes the other way.
+  const rot = s.rot && m[0] * m[3] - m[1] * m[2] < 0 ? -s.rot : s.rot;
   if (s.kind === "text") {
     const box = textBox(s, scale);
     const [cx, cy] = at(s.x + box.w / 2, s.y + box.h / 2);
-    return { ...s, x: cx - box.w / 2, y: cy - box.h / 2 };
+    return { ...s, x: cx - box.w / 2, y: cy - box.h / 2, rot };
   }
   const [x1, y1] = at(s.x1, s.y1);
   const [x2, y2] = at(s.x2, s.y2);
-  return { ...s, x1, y1, x2, y2 };
+  return { ...s, x1, y1, x2, y2, rot };
 }
 
 /** The box a shape covers, in image pixels. */
@@ -93,6 +95,59 @@ export function shapeBounds(s: Shape, scale: number): Rect {
   return { x: r.x - half, y: r.y - half, w: r.w + 2 * half, h: r.h + 2 * half };
 }
 
+/** The angle a shape is drawn at about its center; lines and strokes turn their points instead. */
+function spin(s: Shape): number {
+  return s.kind === "rect" || s.kind === "ellipse" || s.kind === "highlight" || s.kind === "text" ? (s.rot ?? 0) : 0;
+}
+
+export function shapeCenter(s: Shape, scale: number): [number, number] {
+  const b = shapeBounds(s, scale);
+  return [b.x + b.w / 2, b.y + b.h / 2];
+}
+
+/** Blurs and pixelation hide what is under them and badges are round: turning them does nothing. */
+export const canRotate = (s: Shape) => s.kind !== "blur" && s.kind !== "pixelate" && s.kind !== "step";
+
+/** Whether mirroring a shape changes how it looks. */
+export const canFlip = (s: Shape) =>
+  s.kind === "arrow" || s.kind === "line" || s.kind === "pen" || s.kind === "text" || spin(s) !== 0;
+
+/** `s` turned by `angle` radians about its center. */
+export function rotateShape(s: Shape, angle: number, scale: number): Shape {
+  if (!canRotate(s)) return s;
+  if (s.kind === "rect" || s.kind === "ellipse" || s.kind === "highlight" || s.kind === "text") {
+    return { ...s, rot: (s.rot ?? 0) + angle };
+  }
+  const [cx, cy] = shapeCenter(s, scale);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const at = (x: number, y: number) => [cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos];
+  if (s.kind === "pen") {
+    const points: number[] = [];
+    for (let i = 0; i < s.points.length; i += 2) points.push(...at(s.points[i], s.points[i + 1]));
+    return { ...s, points };
+  }
+  if (s.kind === "step") return s;
+  const [x1, y1] = at(s.x1, s.y1);
+  const [x2, y2] = at(s.x2, s.y2);
+  return { ...s, x1, y1, x2, y2 };
+}
+
+/** `s` mirrored about its center, left to right when `horizontal`, else top to bottom. */
+export function flipShape(s: Shape, horizontal: boolean, scale: number): Shape {
+  if (s.kind === "step" || s.kind === "blur" || s.kind === "pixelate") return s;
+  if (s.kind === "text") {
+    const flipped = horizontal ? { flipX: !s.flipX } : { flipY: !s.flipY };
+    return { ...s, ...flipped, rot: -(s.rot ?? 0) };
+  }
+  if (s.kind === "rect" || s.kind === "ellipse" || s.kind === "highlight") return { ...s, rot: -(s.rot ?? 0) };
+  const [cx, cy] = shapeCenter(s, scale);
+  const mx = (x: number) => (horizontal ? 2 * cx - x : x);
+  const my = (y: number) => (horizontal ? y : 2 * cy - y);
+  if (s.kind === "pen") return { ...s, points: s.points.map((v, i) => (i % 2 ? my(v) : mx(v))) };
+  return { ...s, x1: mx(s.x1), y1: my(s.y1), x2: mx(s.x2), y2: my(s.y2) };
+}
+
 function segmentDistance(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -106,6 +161,14 @@ function segmentDistance(px: number, py: number, x1: number, y1: number, x2: num
  * hit on their stroke only, so what they surround stays reachable.
  */
 export function hitShape(s: Shape, x: number, y: number, scale: number, tol: number): boolean {
+  const angle = spin(s);
+  if (angle) {
+    // Test in the shape's own frame.
+    const [cx, cy] = shapeCenter(s, scale);
+    const cos = Math.cos(-angle);
+    const sin = Math.sin(-angle);
+    [x, y] = [cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos];
+  }
   const reach = tol + (s.size * scale) / 2;
   if (s.kind === "pen") {
     const p = s.points;
@@ -135,19 +198,79 @@ export function hitShape(s: Shape, x: number, y: number, scale: number, tol: num
   return inside(tol);
 }
 
-/** Marks the selected shape (editing view only). */
-export function drawSelection(ctx: CanvasRenderingContext2D, b: Rect, scale: number) {
-  const pad = 4 * scale;
-  ctx.save();
-  ctx.lineWidth = scale;
+const SELECTION_PAD = 4;
+const HANDLE_REACH = 20;
+
+/**
+ * Where the rotate handle of a selected shape sits, or null when the shape
+ * can't be turned. `unit` is image pixels per CSS pixel. The handle goes above
+ * the shape, or below when that would put it off a `w`×`h` image.
+ */
+export function handleAt(s: Shape, scale: number, unit: number, w: number, h: number): [number, number] | null {
+  if (!canRotate(s)) return null;
+  const b = shapeBounds(s, scale);
+  const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+  const reach = b.h / 2 + (SELECTION_PAD + HANDLE_REACH) * unit;
+  const angle = spin(s);
+  const at = (side: number): [number, number] => [cx - side * Math.sin(angle) * -reach, cy + side * Math.cos(angle) * -reach];
+  const on = ([x, y]: [number, number]) => x >= 0 && x <= w && y >= 0 && y <= h;
+  const above = at(1);
+  const below = at(-1);
+  return on(above) || !on(below) ? above : below;
+}
+
+/** The upright box around a selected shape and its outline, in image pixels. */
+export function selectionExtent(s: Shape, scale: number, unit: number) {
+  const b = shapeBounds(s, scale);
+  const pad = SELECTION_PAD * unit;
+  const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+  const angle = spin(s);
+  const hw = (Math.abs(Math.cos(angle)) * (b.w + 2 * pad) + Math.abs(Math.sin(angle)) * (b.h + 2 * pad)) / 2;
+  const hh = (Math.abs(Math.sin(angle)) * (b.w + 2 * pad) + Math.abs(Math.cos(angle)) * (b.h + 2 * pad)) / 2;
+  return { cx, cy, minX: cx - hw, maxX: cx + hw, minY: cy - hh, maxY: cy + hh };
+}
+
+/** Marks the selected shape and its rotate handle (editing view only). */
+export function drawSelection(
+  ctx: CanvasRenderingContext2D,
+  s: Shape,
+  scale: number,
+  unit: number,
+  handle: [number, number] | null,
+) {
+  const b = shapeBounds(s, scale);
+  const pad = SELECTION_PAD * unit;
+  const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
   const strokes: [string, number[]][] = [
     ["#ffffff", []],
-    ["#007aff", [4 * scale, 3 * scale]],
+    ["#007aff", [4 * unit, 3 * unit]],
   ];
+  ctx.save();
+  ctx.lineWidth = unit;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(spin(s));
   for (const [color, dash] of strokes) {
     ctx.strokeStyle = color;
     ctx.setLineDash(dash);
-    ctx.strokeRect(b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad);
+    ctx.strokeRect(-b.w / 2 - pad, -b.h / 2 - pad, b.w + 2 * pad, b.h + 2 * pad);
+  }
+  ctx.restore();
+  if (handle) {
+    const [hx, hy] = handle;
+    const len = Math.hypot(cx - hx, cy - hy) || 1;
+    const stem = HANDLE_REACH * unit;
+    ctx.strokeStyle = "#007aff";
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + ((cx - hx) / len) * stem, hy + ((cy - hy) / len) * stem);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(hx, hy, 5 * unit, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.lineWidth = 1.5 * unit;
+    ctx.stroke();
   }
   ctx.restore();
 }
@@ -218,6 +341,15 @@ export function drawShape(ctx: CanvasRenderingContext2D, base: CanvasImageSource
   ctx.lineJoin = "round";
   const width = s.size * scale;
   ctx.lineWidth = width;
+  const angle = spin(s);
+  const [fx, fy] = s.kind === "text" ? [s.flipX ? -1 : 1, s.flipY ? -1 : 1] : [1, 1];
+  if (angle || fx < 0 || fy < 0) {
+    const [cx, cy] = shapeCenter(s, scale);
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    ctx.scale(fx, fy);
+    ctx.translate(-cx, -cy);
+  }
 
   if (s.kind === "pixelate") {
     pixelate(ctx, base, normalize(s.x1, s.y1, s.x2, s.y2), Math.max(2, s.size * scale));
