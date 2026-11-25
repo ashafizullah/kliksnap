@@ -66,6 +66,12 @@ pub fn window_ready(window: WebviewWindow, state: State<AppState>) {
     }
 }
 
+/// Keeps the calling window above other apps' windows, or lets them go in front.
+#[tauri::command]
+pub fn set_on_top(window: WebviewWindow, on: bool) -> Result<(), String> {
+    window.set_always_on_top(on).map_err(|e| e.to_string())
+}
+
 /// Sets the crosshair again until KlikSnap has become the active app, which
 /// macOS does asynchronously, then once more for good measure.
 fn keep_crosshair(window: WebviewWindow) {

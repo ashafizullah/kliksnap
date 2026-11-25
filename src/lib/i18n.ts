@@ -144,6 +144,7 @@ const ID: Record<string, string> = {
   "Drag the crop or its edges to change it": "Seret area pangkas atau tepinya untuk mengubahnya",
   Reset: "Atur ulang",
   Apply: "Terapkan",
+  "Keep on top of other apps": "Tetap di atas aplikasi lain",
   "Rotate and flip": "Putar dan balik",
   "Rotate left": "Putar ke kiri",
   "Rotate right": "Putar ke kanan",

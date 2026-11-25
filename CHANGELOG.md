@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.23.0
+
+### Changed
+
+- The editor no longer stays on top of every other app, so you can look something up in another app while annotating. On macOS, KlikSnap shows in the Dock and in `⌘Tab` while an editor is open, to switch back to it. The pin button at the bottom left keeps the editor on top, as before, and is remembered
+
 ## 0.22.0
 
 ### Changed
