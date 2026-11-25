@@ -1241,6 +1241,9 @@ fn on_window_destroyed(app: &AppHandle, label: &str) {
         if let Some(id) = state.window_shots.lock().unwrap().remove(label) {
             state.release(id);
         }
+        if label.starts_with("editor-") {
+            ui::show_in_dock(app, Some(label));
+        }
         if state.click_through.lock().unwrap().remove(label) {
             tray::refresh(app);
         }
@@ -1320,6 +1323,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::window_ready,
+            commands::set_on_top,
             commands::close_window,
             commands::overlay_info,
             commands::overlay_windows,

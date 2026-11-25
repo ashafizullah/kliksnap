@@ -728,8 +728,8 @@ pub fn open_editor(
     let url = format!("editor.html?id={id}");
     let win = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
         .title("KlikSnap")
-        // Like Settings: stays beside the app you're annotating for.
-        .always_on_top(true)
+        // Other apps can go in front, to look something up while annotating;
+        // the editor's pin keeps it on top instead (`set_on_top`).
         .inner_size(w, h)
         .min_inner_size(640.0, 360.0)
         .visible(false)
@@ -737,7 +737,29 @@ pub fn open_editor(
     let x = area.x + (area.w - area.n(w)) / 2.0;
     let y = area.y + (area.h - area.n(h)) / 2.0;
     place(&win, &area, x, y, w, h);
+    show_in_dock(app, None);
     Ok(label)
+}
+
+/// macOS: while an editor is open KlikSnap has a Dock icon and a ⌘Tab entry,
+/// so an editor behind another app can be brought back; otherwise it lives in
+/// the menu bar only. `closing` is an editor on its way out.
+pub fn show_in_dock(app: &AppHandle, closing: Option<&str>) {
+    #[cfg(target_os = "macos")]
+    {
+        let editing = app
+            .webview_windows()
+            .keys()
+            .any(|l| l.starts_with("editor-") && Some(l.as_str()) != closing);
+        let policy = if editing {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        let _ = app.set_activation_policy(policy);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, closing);
 }
 
 /// The update offer, replacing an open one.

@@ -96,6 +96,7 @@
     front: "M9 2l6 3.5-6 3.5-6-3.5zM3 9.5l6 3.5 6-3.5M9 13v3",
     back: "M9 16l6-3.5-6-3.5-6 3.5zM3 8.5l6-3.5 6 3.5M9 5V2",
     copy: "M6.5 6.5h8v8h-8zM11.5 6.5v-3h-8v8h3",
+    pin: "M11 2.5l4.5 4.5M12.8 4.2l-3.5 3.5-3 .3-1.6 1.6 4.2 4.2 1.6-1.6.3-3 3.5-3.5M7.3 10.7L2.5 15.5",
   };
 
   // Looks a shape can take on top of its color and size, and the shapes that take them.
@@ -155,8 +156,16 @@
   let lastBackdrop = $state<Backdrop>(parseBackdrop(prefs.lastBackdrop) ?? DEFAULT_BACKDROP);
   let backdropPanel = $state(false);
 
+  // Pinned, the editor stays above other apps; otherwise they can go in front of it.
+  let onTop = $state<boolean>(prefs.onTop === true);
+
+  function setOnTop(on: boolean) {
+    onTop = on;
+    invoke("set_on_top", { on }).catch(() => {});
+  }
+
   $effect(() => {
-    const json = JSON.stringify({ sizes, font, bold, textBg, custom, styles, backdrop: scene.backdrop, lastBackdrop });
+    const json = JSON.stringify({ sizes, font, bold, textBg, custom, styles, backdrop: scene.backdrop, lastBackdrop, onTop });
     try {
       localStorage.setItem(PREFS, json);
     } catch {
@@ -975,6 +984,7 @@
       const info = await invoke<{ width: number; height: number; scale: number } | null>("shot_info", { id });
       if (!info) return closeWindow();
       scale = info.scale || 1;
+      if (onTop) await invoke("set_on_top", { on: true }).catch(() => {});
       base = await loadImage(imageUrl(`shot-${id}`));
       fit();
       redraw();
@@ -1338,6 +1348,17 @@
 
   <footer>
     <div class="group zoom">
+      <button
+        class="icon"
+        class:active={onTop}
+        title={tr("Keep on top of other apps")}
+        aria-label={tr("Keep on top of other apps")}
+        aria-pressed={onTop}
+        onclick={() => setOnTop(!onTop)}
+      >
+        <svg viewBox="0 0 18 18"><path d={ICONS.pin} /></svg>
+      </button>
+      <span class="rule"></span>
       <button class="icon" title="{tr('Zoom out')} ({mod}−)" aria-label={tr("Zoom out")} disabled={zoom <= 1} onclick={() => setZoom(zoom / 1.25)}>
         <svg viewBox="0 0 18 18"><path d="M4 9h10" /></svg>
       </button>
