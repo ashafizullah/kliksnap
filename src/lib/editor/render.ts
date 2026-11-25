@@ -631,7 +631,8 @@ export function drawScene(
 }
 
 /** Darkens everything outside the crop rectangle (editing view only). */
-export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: number) {
+/** Darkens what the crop leaves out; with `unit` (image pixels per CSS pixel), also draws its resize handles. */
+export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: number, unit = 0) {
   const { width, height } = ctx.canvas;
   ctx.save();
   ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
@@ -643,7 +644,70 @@ export function drawCropMask(ctx: CanvasRenderingContext2D, crop: Rect, scale: n
   ctx.lineWidth = scale;
   ctx.setLineDash([6 * scale, 4 * scale]);
   ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
+  if (unit) {
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.lineWidth = unit;
+    const half = 4.5 * unit;
+    for (const fy of [0, 0.5, 1]) {
+      for (const fx of [0, 0.5, 1]) {
+        if (fx === 0.5 && fy === 0.5) continue;
+        // Kept whole on the canvas when the crop reaches its edge.
+        const x = Math.min(Math.max(crop.x + fx * crop.w, half), width - half);
+        const y = Math.min(Math.max(crop.y + fy * crop.h, half), height - half);
+        ctx.beginPath();
+        ctx.rect(x - half, y - half, 2 * half, 2 * half);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+  }
   ctx.restore();
+}
+
+/** The sides of a crop a press takes hold of: one or two to resize it, "move" (inside) to drag all of it. */
+export type CropHold = { l: boolean; r: boolean; t: boolean; b: boolean } | "move";
+
+/** What a press at `x, y` takes hold of on crop `c`, within `tol` of a side; null outside it. */
+export function cropHoldAt(c: Rect, x: number, y: number, tol: number): CropHold | null {
+  if (x < c.x - tol || x > c.x + c.w + tol || y < c.y - tol || y > c.y + c.h + tol) return null;
+  const [dl, dr, dt, db] = [Math.abs(x - c.x), Math.abs(x - c.x - c.w), Math.abs(y - c.y), Math.abs(y - c.y - c.h)];
+  // On a small crop both sides are in reach: the nearer one wins.
+  const hold = { l: dl <= tol && dl <= dr, r: dr <= tol && dr < dl, t: dt <= tol && dt <= db, b: db <= tol && db < dt };
+  return hold.l || hold.r || hold.t || hold.b ? hold : "move";
+}
+
+export function cropCursor(h: CropHold) {
+  if (h === "move") return "move";
+  if ((h.l && h.t) || (h.r && h.b)) return "nwse-resize";
+  if ((h.r && h.t) || (h.l && h.b)) return "nesw-resize";
+  return h.l || h.r ? "ew-resize" : "ns-resize";
+}
+
+/** Crop `c` with the sides `h` holds pulled by `dx, dy`, kept on a `w`×`h` image and at least `min` across. */
+export function pullCrop(c: Rect, hold: CropHold, dx: number, dy: number, w: number, h: number, min: number): Rect {
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  if (hold === "move") return { ...c, x: clamp(c.x + dx, 0, w - c.w), y: clamp(c.y + dy, 0, h - c.h) };
+  const [mw, mh] = [Math.min(min, c.w), Math.min(min, c.h)];
+  let [x1, y1, x2, y2] = [c.x, c.y, c.x + c.w, c.y + c.h];
+  if (hold.l) x1 = clamp(x1 + dx, 0, x2 - mw);
+  if (hold.r) x2 = clamp(x2 + dx, x1 + mw, w);
+  if (hold.t) y1 = clamp(y1 + dy, 0, y2 - mh);
+  if (hold.b) y2 = clamp(y2 + dy, y1 + mh, h);
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+/** The part of crop `c` on a `w`×`h` image, in whole pixels: what the export keeps. */
+export function cropOnImage(c: Rect, w: number, h: number): Rect {
+  const x = Math.max(0, Math.round(c.x));
+  const y = Math.max(0, Math.round(c.y));
+  return {
+    x,
+    y,
+    w: Math.max(1, Math.min(w, Math.round(c.x + c.w)) - x),
+    h: Math.max(1, Math.min(h, Math.round(c.y + c.h)) - y),
+  };
 }
 
 export type Insets = { top: number; right: number; bottom: number; left: number };
@@ -876,17 +940,7 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, image: CanvasImageSource, w
 
 /** Renders the final image (annotations applied, crop and backdrop honored) as RGBA bytes. */
 export function exportPixels(base: HTMLCanvasElement, scene: Scene, scale: number) {
-  const full = { x: 0, y: 0, w: base.width, h: base.height };
-  const c = scene.crop ?? full;
-  // The part of the crop on the image.
-  const x = Math.max(0, Math.round(c.x));
-  const y = Math.max(0, Math.round(c.y));
-  const r = {
-    x,
-    y,
-    w: Math.max(1, Math.min(full.w, Math.round(c.x + c.w)) - x),
-    h: Math.max(1, Math.min(full.h, Math.round(c.y + c.h)) - y),
-  };
+  const r = cropOnImage(scene.crop ?? { x: 0, y: 0, w: base.width, h: base.height }, base.width, base.height);
   const canvas = document.createElement("canvas");
   canvas.width = r.w;
   canvas.height = r.h;

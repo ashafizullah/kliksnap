@@ -41,7 +41,11 @@
     type Tool,
   } from "./lib/editor/shapes";
   import {
+    cropCursor,
+    cropHoldAt,
+    cropOnImage,
     drawCropMask,
+    pullCrop,
     drawFrame,
     drawScene,
     canFlip,
@@ -61,6 +65,7 @@
     hitShape,
     turnImage,
     turnShape,
+    type CropHold,
     type Grip,
   } from "./lib/editor/render";
 
@@ -172,6 +177,30 @@
   let draft = $state.raw<Shape | null>(null);
   let cropDraft = $state.raw<Rect | null>(null);
   let dragFrom: { x: number; y: number } | null = null;
+  // The crop being resized or moved: what it was, and where the press was.
+  let cropHold: { hold: CropHold; from: { x: number; y: number }; start: Rect } | null = null;
+
+  // While Crop is on, all of the screenshot shows, the crop on it with handles.
+  // Leaving it (Apply, Enter or another tool) shows only what the crop keeps.
+  let toolBeforeCrop: Tool = "select";
+  $effect(() => {
+    if (tool !== "crop") toolBeforeCrop = tool;
+  });
+
+  function applyCrop() {
+    tool = toolBeforeCrop;
+  }
+
+  function resetCrop() {
+    if (scene.crop) commit({ ...scene, crop: null });
+  }
+
+  // The part of the screenshot in view, in its pixels.
+  const shown = $derived.by<Rect>(() => {
+    const w = image?.width ?? 1;
+    const h = image?.height ?? 1;
+    return scene.crop && tool !== "crop" ? cropOnImage(scene.crop, w, h) : { x: 0, y: 0, w, h };
+  });
 
   // The picked shape, and the scene while it is being dragged or turned. A
   // shape is picked when it is added, or by pressing on it.
@@ -463,7 +492,7 @@
     const shown = hidden === null ? full : { ...full, shapes: full.shapes.filter((_, i) => i !== hidden) };
     drawScene(ctx, image, shown, scale, draft);
     const crop = cropDraft ?? scene.crop;
-    if (crop) drawCropMask(ctx, crop, scale);
+    if (crop && tool === "crop") drawCropMask(ctx, crop, scale, 1 / ratio);
     if (sel !== null) {
       const s = full.shapes[sel];
       const unit = 1 / ratio;
@@ -472,7 +501,7 @@
   }
 
   $effect(() => {
-    void [scene, draft, cropDraft, live, sel];
+    void [scene, draft, cropDraft, live, sel, tool, ratio];
     redraw();
   });
 
@@ -485,7 +514,7 @@
   const preview = $derived.by(() => {
     const b = scene.backdrop;
     if (!b || !image) return null;
-    const k = (view.w / image.width) * scale;
+    const k = ratio * scale;
     const pad = b.padding * k;
     const radius = b.radius * k;
     const framed = b.frame !== "none";
@@ -525,7 +554,7 @@
 
   function fit() {
     if (!image) return;
-    const natural = { w: image.width / scale, h: image.height / scale };
+    const natural = { w: shown.w / scale, h: shown.h / scale };
     const pad = 2 * (scene.backdrop?.padding ?? 0);
     const inset = frameInsets(scene.backdrop?.frame ?? "none", natural.w, 1);
     const k = Math.min(
@@ -578,6 +607,12 @@
     backdropPanel = false;
     if (text) commitText();
     const p = toImage(e);
+    const hold = tool === "crop" && scene.crop ? cropHoldAt(scene.crop, p.x, p.y, 8 / ratio) : null;
+    if (hold && scene.crop) {
+      canvas.setPointerCapture(e.pointerId);
+      cropHold = { hold, from: p, start: scene.crop };
+      return;
+    }
     const grip = gripAt(p);
     if (sel !== null && grip) {
       const [gx, gy] = gripPoint(scene.shapes[sel], grip, scale);
@@ -617,6 +652,12 @@
   }
 
   function onPointerMove(e: PointerEvent) {
+    if (cropHold) {
+      const { hold, from, start } = cropHold;
+      const at = toImage(e, false);
+      cropDraft = pullCrop(start, hold, at.x - from.x, at.y - from.y, canvas.width, canvas.height, 8 * scale);
+      return;
+    }
     if (moving) {
       const { index, from, copy } = moving;
       const at = toImage(e);
@@ -650,8 +691,10 @@
     if (dragFrom) cursor = null;
     else {
       const at = toImage(e);
+      const hold = tool === "crop" && scene.crop ? cropHoldAt(scene.crop, at.x, at.y, 8 / ratio) : null;
       const grip = gripAt(at);
-      if (grip && sel !== null) cursor = gripCursor(scene.shapes[sel], grip);
+      if (hold) cursor = cropCursor(hold);
+      else if (grip && sel !== null) cursor = gripCursor(scene.shapes[sel], grip);
       else cursor = onHandle(at) ? "grab" : grabAt(at) !== null ? "move" : null;
     }
     if (!dragFrom) return;
@@ -684,6 +727,14 @@
   }
 
   function onPointerUp() {
+    if (cropHold) {
+      const { start } = cropHold;
+      const c = cropDraft;
+      if (c && (c.x !== start.x || c.y !== start.y || c.w !== start.w || c.h !== start.h)) commit({ ...scene, crop: c });
+      cropHold = null;
+      cropDraft = null;
+      return;
+    }
     if (moving || rotating || resizing) {
       if (live) commit(live);
       live = null;
@@ -741,7 +792,9 @@
   }
 
   // Display ratio between CSS pixels and image pixels.
-  const ratio = $derived(image && view.w ? view.w / image.width : 1);
+  const ratio = $derived(image && view.w ? view.w / shown.w : 1);
+  // Where the view starts on the canvas, in CSS pixels.
+  const off = $derived({ x: shown.x * ratio, y: shown.y * ratio });
   const textFontPx = $derived((text?.style.size ?? sizes.text) * scale * ratio);
 
   // The picked shape's own buttons, in CSS pixels: on the side its rotate handle is not.
@@ -750,11 +803,11 @@
     const unit = 1 / ratio;
     const e = selectionExtent(selShape, scale, unit);
     const h = handleAt(selShape, scale, unit, image.width, image.height);
-    const y = !h || h[1] <= e.cy ? e.maxY * ratio + 10 : e.minY * ratio - 40;
+    const y = (!h || h[1] <= e.cy ? e.maxY * ratio + 10 : e.minY * ratio - 40) - off.y;
     const flip = canFlip(selShape);
     const half = ((flip ? 6 : 4) * 28 + 8) / 2;
     return {
-      x: Math.min(Math.max(e.cx * ratio, half), Math.max(half, view.w - half)),
+      x: Math.min(Math.max(e.cx * ratio - off.x, half), Math.max(half, view.w - half)),
       y: Math.min(Math.max(y, 4), Math.max(4, view.h - 34)),
       flip,
       first: sel === 0,
@@ -834,6 +887,11 @@
       backdropPanel = false;
       return;
     }
+    if (e.key === "Escape" && cropHold) {
+      cropHold = null;
+      cropDraft = null;
+      return;
+    }
     if (e.key === "Escape" && (moving || rotating || resizing)) {
       if (moving?.copy) selected = moving.index;
       live = null;
@@ -875,6 +933,12 @@
       dragFrom = null;
       draft = null;
       cropDraft = null;
+      return;
+    }
+    if (tool === "crop" && (e.key === "Enter" || e.key === "Escape")) {
+      // Not a click on the focused button.
+      e.preventDefault();
+      applyCrop();
       return;
     }
     const picked = TOOLS.find((t) => t.key === key);
@@ -1066,6 +1130,13 @@
 
     <!-- How the tool, or the picked shape, looks. -->
     <div class="bar options">
+    {#if tool === "crop"}
+      <span class="muted">{scene.crop ? tr("Drag the crop or its edges to change it") : tr("Drag over the part to keep")}</span>
+      <div class="group">
+        <button class="chip" disabled={!scene.crop} onclick={resetCrop}>{tr("Reset")}</button>
+        <button class="chip active" title="{tr('Apply')} (Enter)" onclick={applyCrop}>{tr("Apply")}</button>
+      </div>
+    {:else}
     <div class="group" role="radiogroup" aria-label={tr("Color")}>
       {#each COLORS as c (c)}
         <button
@@ -1174,6 +1245,7 @@
         </button>
       </div>
     {/if}
+    {/if}
     </div>
   </header>
 
@@ -1198,18 +1270,20 @@
         style:border-radius={preview?.screenRadius ?? "0"}
         style:box-shadow={preview?.shadow}
       >
-        <canvas
-          bind:this={canvas}
-          class:text-tool={tool === "text"}
-          class:select-tool={tool === "select"}
-          style="width:{view.w}px; height:{view.h}px"
-          style:border-radius={preview?.screenRadius ?? "0"}
-          style:cursor={cursor}
-          ondblclick={onDoubleClick}
-          onpointerdown={onPointerDown}
-          onpointermove={onPointerMove}
-          onpointerup={onPointerUp}
-        ></canvas>
+        <!-- The canvas holds all of the screenshot; outside Crop, only the crop of it shows. -->
+        <div class="clip" style:border-radius={preview?.screenRadius ?? "0"}>
+          <canvas
+            bind:this={canvas}
+            class:text-tool={tool === "text"}
+            class:select-tool={tool === "select"}
+            style="width:{(image?.width ?? 0) * ratio}px; height:{(image?.height ?? 0) * ratio}px; left:{-off.x}px; top:{-off.y}px"
+            style:cursor={cursor}
+            ondblclick={onDoubleClick}
+            onpointerdown={onPointerDown}
+            onpointermove={onPointerMove}
+            onpointerup={onPointerUp}
+          ></canvas>
+        </div>
         {#if text}
           {@const st = text.style}
           <textarea
@@ -1219,7 +1293,7 @@
             wrap="off"
             spellcheck="false"
             aria-label={tr("Text")}
-            style="left:{text.x * ratio}px; top:{text.y * ratio}px; width:{textWidth}px; color:{st.bg ? badgeText(st.color) : st.color}; font:{fontCss(st.font, st.bold, textFontPx)}; line-height:1.25"
+            style="left:{text.x * ratio - off.x}px; top:{text.y * ratio - off.y}px; width:{textWidth}px; color:{st.bg ? badgeText(st.color) : st.color}; font:{fontCss(st.font, st.bold, textFontPx)}; line-height:1.25"
             style:background={st.bg ? st.color : undefined}
             style:box-shadow={st.bg ? `0 0 0 ${textPad(textFontPx)}px ${st.color}` : undefined}
             style:border-radius={st.bg ? `${textFontPx * 0.05}px` : undefined}
@@ -1605,6 +1679,14 @@
   .canvas-wrap {
     position: relative;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+  }
+  .clip {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+  .clip canvas {
+    position: absolute;
   }
   canvas {
     display: block;
