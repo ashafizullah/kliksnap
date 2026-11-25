@@ -3,6 +3,12 @@
 The section for each version becomes its GitHub release notes and the text of
 the in-app "Update available" dialog. Keep entries short and user-facing.
 
+## 0.22.0
+
+### Changed
+
+- Crop now cuts the screenshot in the editor too: once you apply it (the Apply button, `Enter`, or picking another tool), only the part you keep shows. Before applying, drag the crop's edges or corners to resize it, or drag inside it to move it. Press `C` again to change it, or Reset to undo it
+
 ## 0.21.0
 
 ### Added
